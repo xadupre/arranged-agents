@@ -1,0 +1,15 @@
+.git/**
+.github/**
+.vscode/**
+src/**
+test/**
+scripts/**
+tsconfig.json
+eslint.config.mjs
+.prettierignore
+.gitignore
+package-lock.json
+node_modules/@github/copilot-sdk-*/**
+dist/test/**
+dist/scripts/**
+**/*.map

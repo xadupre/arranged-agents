@@ -1,0 +1,89 @@
+{
+  "name": "arranged-agents",
+  "displayName": "Arranged Agents",
+  "description": "Calls the locally installed Copilot CLI and presents its answers as structured Markdown.",
+  "version": "0.1.0",
+  "publisher": "xadupre",
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/xadupre/arranged-agents.git"
+  },
+  "engines": {
+    "vscode": "^1.105.0",
+    "node": ">=22.13.0"
+  },
+  "categories": [
+    "AI",
+    "Other"
+  ],
+  "extensionKind": [
+    "workspace"
+  ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": false
+    },
+    "virtualWorkspaces": false
+  },
+  "main": "./dist/src/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "arrangedAgents.ask",
+        "title": "Arranged Agents: Ask Copilot"
+      }
+    ],
+    "configuration": {
+      "title": "Arranged Agents",
+      "properties": {
+        "arrangedAgents.cliPath": {
+          "type": "string",
+          "default": "copilot",
+          "scope": "machine",
+          "description": "Path to your installed Copilot CLI executable. It is executed directly, not through a shell."
+        },
+        "arrangedAgents.model": {
+          "type": "string",
+          "default": "",
+          "description": "Copilot model ID. Empty uses the CLI default."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p .",
+    "watch": "tsc -w -p .",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "npm run compile && node --test dist/test/*.test.js",
+    "smoke": "npm run compile && node dist/scripts/smoke.js",
+    "check": "npm run format:check && npm run lint && npm test",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package --allow-missing-license"
+  },
+  "dependencies": {
+    "@github/copilot-sdk": "1.0.27",
+    "markdown-it": "^14.1.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@types/markdown-it": "^14.1.0",
+    "@types/node": "^22.0.0",
+    "@types/vscode": "1.105.0",
+    "@vscode/vsce": "^4.0.0",
+    "eslint": "^10.13.0",
+    "prettier": "^3.0.0",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.72.1"
+  },
+  "overrides": {
+    "@github/copilot-sdk": {
+      "zod": "^4.6.7"
+    },
+    "@vscode/vsce": {
+      "@azure/identity": "4.13.0"
+    }
+  }
+}
