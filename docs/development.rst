@@ -65,6 +65,26 @@ On Windows, use ``.venv/Scripts/python.exe`` instead. Open
 ``build/docs/html/index.html`` after a successful build. Sphinx warnings fail the
 build, including broken internal references.
 
+Refreshing feature screenshots
+------------------------------
+
+The feature guide uses committed PNG screenshots of the actual application
+webview with fixed, fictional repositories, conversations and activity. They do
+not require VS Code, GitHub authentication or a Copilot request.
+
+.. code-block:: bash
+
+   npx playwright install chromium
+   npm run docs:screenshots
+
+On Linux, Playwright may also require browser system libraries; install them
+with ``npx playwright install --with-deps chromium`` if Chromium reports missing
+libraries. The generator uses the current renderer, browser script and stylesheet
+with a fixed dark theme, viewport, locale and timezone. It writes seven images
+to ``docs/images`` and fails on browser script errors or unexpected network
+requests. Review the images after UI changes, then rebuild the documentation.
+The Sphinx build uses the committed images and does not need a browser.
+
 GitHub Actions
 --------------
 

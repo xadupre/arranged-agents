@@ -51,6 +51,12 @@ always remain manual, including for the commands listed above. Pending requests
 identify their repository and stay visible regardless of transcript filters.
 Cancellation or closure rejects them.
 
+.. figure:: ../images/safeguards.png
+   :alt: Inline permission request showing a git push command and approval or rejection controls.
+
+   Example manual approval for a repository-changing command. No command was
+   executed to produce this screenshot.
+
 Webview and content security
 ----------------------------
 

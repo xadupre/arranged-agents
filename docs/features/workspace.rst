@@ -7,6 +7,11 @@ Arranged Agents opens as a single editor tab with three resizable panels:
 * the selected repository's Copilot conversation in the center;
 * repositories beneath the chosen parent directory on the right.
 
+.. figure:: ../images/workspace.png
+   :alt: GitHub issues on the left, Markdown conversation in the center and active or saved repositories on the right.
+
+   Three resizable panels, shown with illustrative demo data.
+
 Drag either divider to resize adjacent panels. A focused divider also responds
 to the left and right arrow keys.
 

@@ -50,6 +50,11 @@ Right-click a repository, or focus it and press **Shift+F10**, to access:
 * **Delete all sessions for this repository**, which removes its current and
   archived Arranged Agents conversations.
 
+.. figure:: ../images/sessions.png
+   :alt: Repository context menu offering Close session, New session and deletion of the latest or all sessions.
+
+   Session management menu opened on a demo repository.
+
 Deletion requires inline confirmation. It removes both the application's local
 record and the corresponding Copilot session through the SDK. It never deletes
 repository files, unrelated Copilot sessions or another repository's history.

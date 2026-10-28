@@ -5,6 +5,13 @@ Arranged Agents groups its user-facing capabilities into the feature pages
 below. Start with :doc:`getting_started` for installation and a first
 conversation.
 
+.. figure:: images/workspace.png
+   :alt: Three-panel workspace with GitHub issues, a Copilot conversation and repository sessions.
+
+   Repository activity, conversation and independent sessions in one tab.
+   Screenshots throughout this guide use illustrative demo data rendered by the
+   application webview, not a live Copilot conversation or GitHub activity.
+
 .. toctree::
    :maxdepth: 1
 

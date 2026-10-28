@@ -12,6 +12,11 @@ session. It receives a bounded snapshot of up to 80,000 characters from the
 visible conversation as reference context. Its messages, tools and approvals
 carry a **Parallel** label.
 
+.. figure:: ../images/parallel-work.png
+   :alt: Busy conversation with one parallel request, one queued message and the Parallel ON control.
+
+   Example running parallel request alongside a main session and queued work.
+
 Parallel agents use the same repository and normal permission controls. They can
 run tools and edit files at the same time as the main agent, so changes to the
 same files can conflict. Their answers are visible and saved, but are not
