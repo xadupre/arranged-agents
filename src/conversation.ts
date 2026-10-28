@@ -1,3 +1,5 @@
+import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import type {
   CopilotClient,
   CopilotSession,
@@ -10,6 +12,28 @@ import {
   createCopilotClient,
   type CopilotOptions,
 } from "./copilot";
+
+const MAX_CRASH_RESTARTS = 3;
+
+export class CopilotRecoveryError extends Error {}
+
+function isConnectionFailure(error: unknown): error is Error {
+  if (!(error instanceof Error)) return false;
+  return (
+    ("code" in error &&
+      typeof error.code === "number" &&
+      [-32099, -32098, -32097, -32096].includes(error.code)) ||
+    [
+      "Session is disconnected",
+      "Connection is closed.",
+      "Connection is disposed.",
+    ].includes(error.message) ||
+    error.message.startsWith("Session disconnected while waiting for ") ||
+    /^CLI server (exited( unexpectedly)? with code |connection (closed|failed))/.test(
+      error.message,
+    )
+  );
+}
 
 export interface Conversation {
   readonly sessionId?: string;
@@ -31,11 +55,14 @@ export class CopilotConversation implements Conversation {
   private stopping?: Promise<void>;
   private closed = false;
   private busy = false;
+  private savedSessionId?: string;
+  private onEvent?: (event: SessionEvent) => void;
+  private generation = 0;
 
   constructor(private readonly options: CopilotOptions) {}
 
   get sessionId(): string | undefined {
-    return this.session?.sessionId;
+    return this.savedSessionId;
   }
 
   start(
@@ -43,30 +70,42 @@ export class CopilotConversation implements Conversation {
     onEvent?: (event: SessionEvent) => void,
     sessionId?: string,
   ): Promise<void> {
-    return (this.starting ??= this.run(async (operationSignal) => {
-      const client = await createCopilotClient(this.options);
-      operationSignal.throwIfAborted();
-      this.client = client;
-      await client.start();
-      operationSignal.throwIfAborted();
-      const config = {
-        ...copilotSessionConfig(this.options),
-        streaming: true,
-        onEvent: (event: SessionEvent) => {
-          if (!this.closed) {
-            onEvent?.(event);
-          }
-        },
-      };
-      this.session = sessionId
-        ? await client.resumeSession(sessionId, {
-            ...config,
-            allowTranscriptRecovery: false,
-            continuePendingWork: false,
-          })
-        : await client.createSession({ ...config, name: "Arranged Agents" });
-      operationSignal.throwIfAborted();
-    }, signal));
+    if (!this.starting) {
+      this.savedSessionId = sessionId;
+      this.onEvent = onEvent;
+      this.starting = this.run(
+        (operationSignal) => this.connect(operationSignal),
+        signal,
+      );
+    }
+    return this.starting;
+  }
+
+  private async connect(signal: AbortSignal): Promise<void> {
+    const generation = ++this.generation;
+    const client = await createCopilotClient(this.options);
+    signal.throwIfAborted();
+    this.client = client;
+    await client.start();
+    signal.throwIfAborted();
+    const config = {
+      ...copilotSessionConfig(this.options),
+      streaming: true,
+      onEvent: (event: SessionEvent) => {
+        if (!this.closed && this.generation === generation) {
+          this.onEvent?.(event);
+        }
+      },
+    };
+    this.session = this.savedSessionId
+      ? await client.resumeSession(this.savedSessionId, {
+          ...config,
+          allowTranscriptRecovery: false,
+          continuePendingWork: false,
+        })
+      : await client.createSession({ ...config, name: "Arranged Agents" });
+    this.savedSessionId = this.session.sessionId;
+    signal.throwIfAborted();
   }
 
   async send(prompt: string, signal: AbortSignal): Promise<string> {
@@ -77,11 +116,26 @@ export class CopilotConversation implements Conversation {
       throw new Error("A request is already running in this repository.");
     }
     this.busy = true;
-    const session = this.session;
     try {
-      return await this.run(async () => {
+      return await this.run(async (operationSignal, recovering) => {
+        if (recovering) await this.connect(operationSignal);
+        operationSignal.throwIfAborted();
+        const session = this.session;
+        if (!session) throw new Error("The Copilot session is not open.");
         const response = await session.sendAndWait(
-          { prompt },
+          {
+            prompt: recovering
+              ? [
+                  "The Copilot process disconnected while handling this request.",
+                  "Complete the request below using the saved conversation and current state, not by starting over.",
+                  "First inspect recorded tool results and the current repository state.",
+                  "Do not blindly repeat commands, writes, commits or pushes whose completion is uncertain.",
+                  "Ask the user before repeating an external or destructive action if its completion cannot be established safely.",
+                  "Request to complete (may already be partially executed):",
+                  prompt,
+                ].join("\n")
+              : prompt,
+          },
           this.options.timeoutMs ?? 120_000,
         );
         if (!response?.data.content.trim()) {
@@ -95,19 +149,23 @@ export class CopilotConversation implements Conversation {
   }
 
   deleteSession(sessionId: string, signal: AbortSignal): Promise<void> {
-    return this.run(async (operationSignal) => {
-      if (!this.client) {
-        const client = await createCopilotClient(this.options);
+    return this.run(
+      async (operationSignal) => {
+        if (!this.client) {
+          const client = await createCopilotClient(this.options);
+          operationSignal.throwIfAborted();
+          this.client = client;
+          await client.start();
+        }
         operationSignal.throwIfAborted();
-        this.client = client;
-        await client.start();
-      }
-      operationSignal.throwIfAborted();
-      if (await this.client.getSessionMetadata(sessionId)) {
-        operationSignal.throwIfAborted();
-        await this.client.deleteSession(sessionId);
-      }
-    }, signal);
+        if (await this.client.getSessionMetadata(sessionId)) {
+          operationSignal.throwIfAborted();
+          await this.client.deleteSession(sessionId);
+        }
+      },
+      signal,
+      false,
+    );
   }
 
   dispose(): Promise<void> {
@@ -117,8 +175,9 @@ export class CopilotConversation implements Conversation {
   }
 
   private async run<T>(
-    action: (signal: AbortSignal) => Promise<T>,
+    action: (signal: AbortSignal, recovering: boolean) => Promise<T>,
     callerSignal: AbortSignal,
+    allowRecovery = true,
   ): Promise<T> {
     if (this.closed) {
       throw new Error("This Copilot session has ended.");
@@ -145,7 +204,44 @@ export class CopilotConversation implements Conversation {
     });
     try {
       signal.throwIfAborted();
-      return await Promise.race([action(signal), cancelled]);
+      const recover = async (): Promise<T> => {
+        for (let attempt = 0; ; attempt++) {
+          signal.throwIfAborted();
+          try {
+            return await action(signal, attempt > 0);
+          } catch (error) {
+            signal.throwIfAborted();
+            if (!allowRecovery || !isConnectionFailure(error)) {
+              if (attempt)
+                throw new CopilotRecoveryError(
+                  `Copilot could not resume after its process crashed: ${error instanceof Error ? error.message : String(error)}. Select the repository to retry, or choose New session.`,
+                  { cause: error },
+                );
+              throw error;
+            }
+            if (attempt === MAX_CRASH_RESTARTS)
+              throw new CopilotRecoveryError(
+                `Copilot recovery stopped after ${MAX_CRASH_RESTARTS} automatic restarts: ${error.message}. Select the repository to retry, or choose New session.`,
+                { cause: error },
+              );
+            this.generation++;
+            this.onEvent?.({
+              id: randomUUID(),
+              parentId: null,
+              timestamp: new Date().toISOString(),
+              type: "session.warning",
+              data: {
+                warningType: "crash_recovery",
+                message: `Copilot disconnected: ${error.message}\nAutomatic recovery ${attempt + 1}/${MAX_CRASH_RESTARTS}. ${this.savedSessionId ? "Resuming the saved session." : "Restarting the process."}`,
+              },
+            });
+            await this.client?.forceStop();
+            signal.throwIfAborted();
+            await delay(250 * 2 ** attempt, undefined, { signal });
+          }
+        }
+      };
+      return await Promise.race([recover(), cancelled]);
     } catch (error) {
       await this.dispose();
       throw error;

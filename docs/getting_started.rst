@@ -106,11 +106,30 @@ histories, drafts, selected repository and session IDs. Reopening with the same
 parent restores the transcript and draft without launching Copilot. Click a
 repository to resume its existing model context.
 
+If a Copilot process disconnects during startup or a live request, the application
+tries up to three automatic restarts, waiting 250, 500 and 1,000 milliseconds
+between attempts, within the normal request timeout. Recovery notices stay visible
+even when technical events are hidden. The saved SDK session is resumed rather
+than replaced; partial answers remain visible, unfinished tools are marked as
+interrupted, and obsolete permission/question prompts are cleared. Parallel agents
+recover independently, and queued requests wait until recovery finishes.
+
+The original request is not blindly resent. A continuation instruction asks the
+agent to inspect recorded results and current repository state before continuing,
+and to ask before repeating uncertain external or destructive actions. This is
+not an exactly-once execution guarantee: a crash can leave an action's outcome
+unknown. After repeated crashes, an explicit error and the original draft remain;
+select the repository to retry the saved context or choose **New session**.
+Authentication/model errors, missing saved sessions, timeouts and user cancellation
+are not automatically retried. **Cancel**, closing the application and removing
+the repository stop recovery too. There is no background polling; an idle process
+disconnection is detected on the next request.
+
 Interrupted requests remain visible with a notice and are not resent
-automatically. Pending commands and permission prompts are not continued on
-resume. If the CLI's saved session is unavailable, an error is shown; **New
-session** explicitly starts fresh while keeping the on-screen history for
-reference, not replaying it to the model.
+automatically after reopening the application. Pending commands and permission
+prompts are not continued on resume. If the CLI's saved session is unavailable,
+an error is shown; **New session** explicitly starts fresh while keeping the
+on-screen history for reference, not replaying it to the model.
 
 History is stored in private, unencrypted JSON files beneath the extension's
 VS Code global storage, outside the repositories.

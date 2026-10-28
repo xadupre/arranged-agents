@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Conversation } from "./conversation";
+import { CopilotRecoveryError, type Conversation } from "./conversation";
 import { buildPrompt, MAX_PROMPT_LENGTH, MAX_SELECTION_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
@@ -761,7 +761,8 @@ export class AgentApplication {
         }
       } catch (error) {
         if (!this.closed) {
-          session.sessionId = undefined;
+          if (!(error instanceof CopilotRecoveryError))
+            session.sessionId = undefined;
           session.draft = question;
         }
         this.fail(session, error);
@@ -865,6 +866,7 @@ export class AgentApplication {
           parent.messages.push(message);
         }
       } catch (error) {
+        if (error instanceof CopilotRecoveryError) this.interruptWork(child);
         const message: ChatMessage = {
           role: "assistant",
           title: `${label} - failed`,
@@ -1295,7 +1297,15 @@ export class AgentApplication {
           timestamp: event.timestamp,
           agentId: event.agentId,
         };
-        if (event.type === "tool.execution_start") {
+        if (
+          event.type === "session.warning" &&
+          event.data.warningType === "crash_recovery"
+        ) {
+          this.interruptWork(session);
+          message.title = "Copilot recovery";
+          message.content = event.data.message;
+          message.error = true;
+        } else if (event.type === "tool.execution_start") {
           message.role = "tool";
           message.title = `${event.data.toolName} - running`;
           message.content = describeTool(
@@ -1347,7 +1357,19 @@ export class AgentApplication {
     }
   }
 
+  private interruptWork(session: RepositorySession): void {
+    this.clearPendingRequests(session.repository.id, session);
+    for (const message of session.eventMessages.values()) {
+      if (message.role === "tool" && message.title?.endsWith(" - running")) {
+        message.title = message.title.replace(/ - running$/, " - interrupted");
+        message.error = true;
+      }
+    }
+    session.eventMessages.clear();
+  }
+
   private fail(session: RepositorySession, error: unknown): void {
+    if (error instanceof CopilotRecoveryError) this.interruptWork(session);
     session.status = "error";
     session.error =
       error instanceof Error && error.name === "AbortError"

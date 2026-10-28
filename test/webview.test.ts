@@ -377,6 +377,28 @@ test("the tab has activity navigation and starts no session until a repository i
   ]);
 });
 
+test("the compact conversation heading groups its title, session status and PostMortem button", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "saved";
+  publish(state);
+  const heading = document.querySelector(".chat-heading");
+  assert.ok(heading);
+  assert.deepEqual(
+    [...heading.children].map((element) => element.id || element.className),
+    ["active-repository", "session-activity", "postmortem"],
+  );
+  assert.equal(
+    heading.querySelector("#active-repository")?.textContent,
+    "Alpha",
+  );
+  assert.match(
+    heading.querySelector("#session-status")?.textContent ?? "",
+    /Session closed/,
+  );
+  assert.equal(document.querySelector(".chat-header h1"), null);
+});
+
 test("PostMortem renders a safe evidence-linked table independently of transcript filters and exports its JSON", async (t) => {
   const { dom, document, posted, publish, state } = await setup(t);
   state.activeId = "alpha";
