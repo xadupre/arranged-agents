@@ -27,6 +27,7 @@ declare function acquireVsCodeApi(): {
   const questionCards = new Map<string, HTMLElement>();
   const question = element("question", HTMLTextAreaElement);
   const send = element("send", HTMLButtonElement);
+  const parallel = element("parallel", HTMLButtonElement);
   const cancel = element("cancel", HTMLButtonElement);
   const restart = element("restart", HTMLButtonElement);
   const error = element("error", HTMLElement);
@@ -177,7 +178,8 @@ declare function acquireVsCodeApi(): {
     const repository = state?.repositories.find(
       (entry) => entry.id === state?.activeId,
     );
-    const ready = repository?.status === "ready";
+    const ready =
+      repository?.status === "ready" || repository?.status === "busy";
     const submitting = pending !== undefined && pending.id === repository?.id;
     question.disabled = !ready || submitting;
     send.disabled = !ready || submitting || !question.value.trim();
@@ -242,7 +244,9 @@ declare function acquireVsCodeApi(): {
     element("active-repository", HTMLElement).textContent =
       active?.name ?? "Select a repository on the right";
     element("session-status", HTMLElement).textContent = active
-      ? statusLabels[active.status]
+      ? statusLabels[active.status] +
+        (active.parallelCount ? ` (${active.parallelCount} parallel)` : "") +
+        (active.queuedCount ? ` (${active.queuedCount} queued)` : "")
       : "No Copilot session has started.";
     question.placeholder = active
       ? `Ask Copilot about ${active.name}...`
@@ -703,6 +707,11 @@ declare function acquireVsCodeApi(): {
     }
   }
 
+  parallel.addEventListener("click", () => {
+    const enabled = parallel.getAttribute("aria-pressed") !== "true";
+    parallel.setAttribute("aria-pressed", String(enabled));
+    parallel.textContent = enabled ? "Parallel ON" : "Parallel OFF";
+  });
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     if (send.disabled || !state?.activeId) {
@@ -717,6 +726,7 @@ declare function acquireVsCodeApi(): {
       type: "send",
       id: state.activeId,
       question: pending.text,
+      parallel: parallel.getAttribute("aria-pressed") === "true",
     });
   });
   question.addEventListener("keydown", (event) => {

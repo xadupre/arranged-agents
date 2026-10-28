@@ -12,7 +12,8 @@ Current features
 * Render Markdown and inline/display LaTeX equations as HTML with native MathML.
 * Choose the CLI executable and model through VS Code settings.
 * Cancel a request and report visible CLI/model errors.
-* Reject concurrent requests within the same repository without blocking other sessions.
+* Send independent parallel questions/actions while tools run, enabled by default.
+* Switch Parallel OFF to queue messages for the main agent after current work.
 * Show activity icons during startup and generation, including background sessions.
 * Distinguish open sessions with a tinted repository background and solid indicator;
   active work uses a different tint and spinner, independently of selection.
@@ -24,7 +25,8 @@ Current features
 * Save histories and drafts locally, stop on close and resume saved sessions lazily.
 * Right-click a repository to close, start fresh or delete its latest/all sessions.
 
-Messages are limited to 20,000 characters. The UI does not automatically include
+Messages are limited to 20,000 characters. Parallel requests receive up to 80,000
+characters of visible conversation context. The UI does not automatically include
 editor selections or file contents.
 
 Data boundaries

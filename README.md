@@ -49,6 +49,13 @@ The old **Ask Copilot** command is an alias for opening the application.
 
 Click a repository on the right, wait for **Session ready**, and send messages
 in the center with **Enter** or **Send**. **Shift+Enter** inserts a new line.
+The **Parallel ON/OFF** button beside **Send** defaults to **ON**. While Copilot
+is working, ON starts an independent request immediately with a bounded snapshot
+of the visible conversation. OFF queues the message for the main agent after
+current requests finish, in submission order. Parallel requests can run tools
+and edit the same repository files, subject to the usual permissions; concurrent
+edits can conflict. Their messages and commands carry a **Parallel** label.
+**Cancel** stops all requests and discards queued messages for that repository.
 Switching repositories preserves their independent conversations
 and drafts. **Refresh** rescans the parent directory without restarting existing
 sessions. Closing the tab stops Copilot and saves the histories, drafts and session

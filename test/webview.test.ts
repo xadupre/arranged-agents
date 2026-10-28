@@ -398,7 +398,7 @@ test("chat sends to the selected repository, blocks double submission and render
   }
   assert.deepEqual(
     posted.filter((message) => message.type === "send"),
-    [{ type: "send", id: "alpha", question: "Explain $x^2$." }],
+    [{ type: "send", id: "alpha", question: "Explain $x^2$.", parallel: true }],
   );
   assert.equal(document.getElementById("activity-icon")?.hidden, false);
   alpha.status = "busy";
@@ -453,13 +453,44 @@ test("Enter sends once, Shift+Enter inserts a newline, and IME composition is no
   assert.equal(event.defaultPrevented, true);
   assert.deepEqual(
     posted.filter((message) => message.type === "send"),
-    [{ type: "send", id: "alpha", question: "First line\nSecond line" }],
+    [
+      {
+        type: "send",
+        id: "alpha",
+        question: "First line\nSecond line",
+        parallel: true,
+      },
+    ],
   );
   state.repositories[0]!.status = "busy";
   publish(state);
-  question.value = "Do not send while busy";
+  question.value = "Ask while busy";
   question.dispatchEvent(enter());
-  assert.equal(posted.filter((message) => message.type === "send").length, 1);
+  assert.equal(posted.filter((message) => message.type === "send").length, 2);
+  assert.deepEqual(posted.at(-1), {
+    type: "send",
+    id: "alpha",
+    question: "Ask while busy",
+    parallel: true,
+  });
+  publish(state);
+  const parallel = document.querySelector<HTMLButtonElement>("#parallel");
+  assert.ok(parallel);
+  parallel.click();
+  assert.equal(parallel.getAttribute("aria-pressed"), "false");
+  assert.equal(parallel.textContent, "Parallel OFF");
+  question.value = "Wait until the end";
+  question.dispatchEvent(enter());
+  assert.deepEqual(posted.at(-1), {
+    type: "send",
+    id: "alpha",
+    question: "Wait until the end",
+    parallel: false,
+  });
+  publish(state);
+  parallel.click();
+  assert.equal(parallel.getAttribute("aria-pressed"), "true");
+  assert.equal(parallel.textContent, "Parallel ON");
 });
 
 test("clicking rendered URLs asks the extension to open the browser without webview navigation", async (t) => {

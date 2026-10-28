@@ -94,6 +94,7 @@ export function renderApplication(resources: {
         <span>Enter to send; Shift+Enter for a new line. Math: $x^2$ or $$E=mc^2$$</span>
         <button id="restart" type="button" title="Start fresh without replaying the displayed history" hidden>New session</button>
         <button id="cancel" type="button" disabled>Cancel</button>
+        <button id="parallel" type="button" aria-pressed="true" title="ON: send independently while work continues (actions allowed). OFF: wait until current work finishes. Parallel actions share the same files.">Parallel ON</button>
         <button id="send" type="submit" disabled>Send</button>
       </div>
     </form>

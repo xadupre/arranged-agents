@@ -24,6 +24,21 @@ resumed instead of creating a fresh session. Resume disables transcript repair
 and continuation of pending work. Closing the application forces cleanup of all
 clients and waits for interrupted application operations to settle.
 
+While work is running, Parallel ON creates an independent client/session using
+the same repository configuration and normal permission controls. A bounded,
+80,000-character snapshot of the visible transcript supplies reference context;
+streamed events use a separate event map and a visible request label. Permissions
+and user-input requests are scoped to their owning operation, so one completion
+cannot dismiss another request's controls. The main and parallel agents share
+files and can therefore produce conflicting edits.
+
+Parallel OFF appends to a repository-local FIFO queue. The queue drains through
+the main session only after both main and parallel work settle, without blocking
+other repositories. Cancellation, removal, session management and shutdown reject
+queued messages and stop parallel work. Parallel errors do not fail the main
+session. Parallel histories and SDK IDs are archived for normal persistence and
+deletion; queues are not resumed automatically.
+
 ``src/storage.ts`` validates versioned snapshots and writes them atomically to
 private, per-parent JSON files in the extension's global storage. The extension
 saves periodically and flushes on tab disposal/deactivation. Snapshots contain

@@ -162,7 +162,7 @@ function handle(request: Request): void {
         });
         break;
       }
-      if (scenario === "permission") {
+      if (scenario === "permission" || scenario === "permission-error") {
         pendingSend = request.id;
         transmit({
           jsonrpc: "2.0",
@@ -294,6 +294,11 @@ function handle(request: Request): void {
       reply(request.id, { success: true });
       if (pendingSend === undefined) {
         throw new Error("Permission decision without a pending request.");
+      }
+      if (scenario === "permission-error") {
+        reply(pendingSend, undefined, "Main request failed");
+        pendingSend = undefined;
+        break;
       }
       reply(pendingSend, {
         response: {
