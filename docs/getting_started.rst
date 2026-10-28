@@ -97,7 +97,7 @@ Install a VSIX
 
 .. code-block:: bash
 
-   npm ci --omit=optional
+   npm ci
    npm run package
    code --install-extension ./arranged-agents-0.1.0.vsix
 

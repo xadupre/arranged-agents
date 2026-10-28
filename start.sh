@@ -43,7 +43,7 @@ if [[ ! -f node_modules/typescript/bin/tsc ||
       ! -f node_modules/@github/copilot-sdk/package.json ||
       ! -f node_modules/markdown-it/package.json ||
       ! -f node_modules/@vscode/markdown-it-katex/package.json ]]; then
-    npm ci --omit=optional
+    npm ci
 fi
 npm run compile
 

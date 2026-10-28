@@ -6,7 +6,7 @@ Local checks
 
 .. code-block:: bash
 
-   npm ci --omit=optional
+   npm ci
    npm run check
    npm run coverage
    npm run package
@@ -101,6 +101,12 @@ there are no C++ or Python coverage jobs.
 Dependency and packaging policy
 -------------------------------
 
+Keep optional dependencies when running ``npm ci``. Koffi, used by the SDK,
+distributes its prebuilt native binaries through optional platform packages.
+``--omit=optional`` forces a source build, which fails with the Windows runner's
+MSVC toolchain. The SDK's bundled runtime packages are excluded from the VSIX
+by ``.vscodeignore`` instead; the application still uses the installed Copilot CLI.
+
 The project has no selected license. ``npm run package`` uses ``--skip-license``
 while the package remains ``UNLICENSED``; this is a packaging policy, not a license
 grant.
@@ -109,6 +115,6 @@ Keep the Zod and Azure Identity overrides until their upstream dependency chains
 are safe to update. The retained development-only Azure Identity/MSAL/UUID chain
 has moderate advisories; removing the Azure pin previously selected a high-severity
 MSAL dependency. Reassess with ``npm audit`` before changing it, and separately
-check production dependencies with ``npm audit --omit=dev --omit=optional``.
+check production dependencies with ``npm audit --omit=dev``.
 The math plugin's transitive KaTeX is overridden to a patched 0.19 release.
 Its parser/rendering API is covered by equation and untrusted-command tests.

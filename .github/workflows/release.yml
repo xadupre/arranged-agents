@@ -24,7 +24,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - run: npm ci --omit=optional
+      - run: npm ci
       - run: npm run check
       - run: npm audit --audit-level=high
       - run: npm run package

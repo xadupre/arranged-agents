@@ -130,7 +130,7 @@ test(
     await launcher.run();
     assert.match(
       await readFile(launcher.log, "utf8"),
-      /^npm ci --omit=optional\nnpm run compile\ncode /,
+      /^npm ci\nnpm run compile\ncode /,
     );
   },
 );

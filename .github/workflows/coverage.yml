@@ -20,7 +20,7 @@ jobs:
         with:
           node-version: "22"
           cache: npm
-      - run: npm ci --omit=optional
+      - run: npm ci
       - run: npm run coverage
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:

@@ -41,7 +41,7 @@ directory, regardless of the terminal's current directory.
 The source checkout is used for compilation, not as the implicit repository root.
 No Copilot process or session starts until a repository is clicked.
 
-Alternatively run `npm ci --omit=optional` and open this directory in VS Code,
+Alternatively run `npm ci` and open this directory in VS Code,
 then select **Run Arranged Agents** and press **F5**. In the development window,
 the application opens automatically and scans the first workspace folder.
 For an installed VSIX, run **Arranged Agents: Open** from the Command Palette.
@@ -141,7 +141,7 @@ extension path. This tests the development extension, not installation of the VS
 Verified with Node.js **22.23.4**, Copilot CLI **1.0.105**, and VS Code's WSL remote
 CLI **1.143.1**:
 
-- `npm ci --omit=optional`, `npm run check`, and `npm run package` pass.
+- `npm ci`, `npm run check`, and `npm run package` pass.
 - `npm run smoke` reaches the authenticated local CLI, receives
   `ARRANGED_AGENTS_OK`, reads a repository file, and renders the result.
 - `code --install-extension ./arranged-agents-0.1.0.vsix` succeeds; the installed
