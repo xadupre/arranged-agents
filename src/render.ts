@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import math from "@vscode/markdown-it-katex";
 import { isExternalUrl } from "./links";
+import type { ChatMessage } from "./application";
 
 const markdown = new MarkdownIt({ html: false, linkify: true });
 markdown.use(math, {
@@ -45,6 +46,46 @@ export function renderText(content: string): string {
     offset = match.lastIndex;
   }
   return html + escape(content.slice(offset));
+}
+
+export class ConversationRenderer {
+  private activeId?: string;
+  private cached: {
+    role: ChatMessage["role"];
+    content: string;
+    html: string;
+  }[] = [];
+
+  render(
+    activeId: string | undefined,
+    messages: readonly ChatMessage[],
+  ): (ChatMessage & { html: string })[] {
+    if (this.activeId !== activeId) {
+      this.cached = [];
+      this.activeId = activeId;
+    }
+    const rendered = messages.map((message, index) => {
+      let cached = this.cached[index];
+      if (
+        !cached ||
+        cached.role !== message.role ||
+        cached.content !== message.content
+      ) {
+        cached = {
+          role: message.role,
+          content: message.content,
+          html:
+            message.role === "assistant" || message.role === "reasoning"
+              ? renderMarkdown(message.content)
+              : renderText(message.content),
+        };
+        this.cached[index] = cached;
+      }
+      return { ...message, html: cached.html };
+    });
+    this.cached.length = messages.length;
+    return rendered;
+  }
 }
 
 export function renderApplication(resources: {

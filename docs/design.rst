@@ -39,6 +39,13 @@ queued messages and stop parallel work. Parallel errors do not fail the main
 session. Parallel histories and SDK IDs are archived for normal persistence and
 deletion; queues are not resumed automatically.
 
+Streaming transcript notifications are coalesced into 30 ms updates before
+copying state to the webview. Lifecycle, draft, permission and question updates
+publish immediately and flush pending streaming updates. The host caches rendered
+HTML for unchanged message content and roles. The webview retains unchanged
+message cards and repository controls instead of rebuilding them for each token;
+changed messages keep expanded evidence, and session changes reset the DOM cache.
+
 ``src/storage.ts`` validates versioned snapshots and writes them atomically to
 private, per-parent JSON files in the extension's global storage. The extension
 saves periodically and flushes on tab disposal/deactivation. Snapshots contain
