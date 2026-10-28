@@ -26,6 +26,7 @@ if (scenario.startsWith("crash:")) appendFileSync("pids", `${process.pid}\n`);
 let buffer = Buffer.alloc(0);
 const prompts: string[] = [];
 let pendingSend: number | undefined;
+let pendingSessionId: string | undefined;
 let eventSequence = 0;
 
 function notify(
@@ -89,9 +90,15 @@ function crashIfRequested(request: Request): boolean {
 
 function handle(request: Request): void {
   appendFileSync("requests.jsonl", `${JSON.stringify(request)}\n`);
-  if (scenario === "question" && request.id === -1) {
+  if (scenario.startsWith("question") && request.id === -1) {
     if (pendingSend === undefined) {
       throw new Error("User answer without a pending request.");
+    }
+    if (scenario === "question-usage") {
+      notify(pendingSessionId, "assistant.usage", {
+        model: "fixture",
+        outputTokens: 7,
+      });
     }
     reply(pendingSend, {
       response: {
@@ -176,6 +183,29 @@ function handle(request: Request): void {
       break;
     }
     case "session.sendAndWait":
+      if (scenario === "persist-usage") {
+        for (const outputTokens of [
+          10,
+          20,
+          0,
+          undefined,
+          -1,
+          1.5,
+          Number.MAX_SAFE_INTEGER,
+        ]) {
+          notify(request.params?.sessionId, "assistant.usage", {
+            model: "fixture",
+            inputTokens: 1000,
+            outputTokens,
+          });
+        }
+        notify(
+          request.params?.sessionId,
+          "assistant.usage",
+          { model: "fixture", outputTokens: 7 },
+          "child-agent",
+        );
+      }
       if (scenario === "postmortem") {
         const entries: unknown[] = JSON.parse(
           request.params?.prompt?.split("\n").at(-1) ?? "[]",
@@ -203,7 +233,14 @@ function handle(request: Request): void {
         });
         break;
       }
-      if (scenario === "question") {
+      if (scenario.startsWith("question")) {
+        pendingSessionId = request.params?.sessionId;
+        if (scenario === "question-usage") {
+          notify(request.params?.sessionId, "assistant.usage", {
+            model: "fixture",
+            outputTokens: 20,
+          });
+        }
         pendingSend = request.id;
         transmit({
           jsonrpc: "2.0",

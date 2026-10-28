@@ -50,6 +50,7 @@ export interface ApplicationState {
     generation?: number;
     parallelCount?: number;
     queuedCount?: number;
+    generatedTokens?: number;
   })[];
   activeId?: string;
   messages: ChatMessage[];
@@ -88,6 +89,7 @@ interface RepositorySession {
   managing?: Promise<void>;
   history: SavedConversation[];
   generation: number;
+  generatedTokens: number;
   removed?: boolean;
   eventMessages: Map<string, ChatMessage>;
   imageAssets?: Map<
@@ -326,6 +328,7 @@ export class AgentApplication {
           history:
             saved?.history?.map((entry) => this.copyConversation(entry)) ?? [],
           generation: 0,
+          generatedTokens: saved?.generatedTokens ?? 0,
           eventMessages: new Map(),
           parallel: new Map(),
           queue: [],
@@ -361,6 +364,7 @@ export class AgentApplication {
           generation: session.generation,
           parallelCount: session.parallel.size,
           queuedCount: session.queue.length,
+          generatedTokens: session.generatedTokens,
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),
       activeId: this.activeId,
@@ -667,6 +671,7 @@ export class AgentApplication {
           "The previous session ended. Starting a new Copilot session; earlier messages are shown for reference only.",
       });
     }
+    if (!session.sessionId) session.generatedTokens = 0;
     const controller = new AbortController();
     session.controller = controller;
     session.status = "starting";
@@ -836,6 +841,7 @@ export class AgentApplication {
     images?: ImageAttachment[],
   ): Promise<void> {
     const requestId = randomUUID();
+    const parentConversation = parent.conversation;
     const label = `Parallel ${requestId.slice(0, 8)}`;
     let remaining = MAX_SELECTION_LENGTH;
     const context: string[] = [];
@@ -871,6 +877,7 @@ export class AgentApplication {
       draft: "",
       history: [],
       generation: 0,
+      generatedTokens: 0,
       eventMessages: new Map(),
       parallel: new Map(),
       queue: [],
@@ -889,7 +896,14 @@ export class AgentApplication {
         child.conversation = conversation;
         await conversation.start(controller.signal, (event) => {
           if (!this.closed && parent.parallel.get(requestId) === child) {
-            this.recordEvent(child, event, parent.messages, label);
+            const tokenOwner =
+              parent.conversation === parentConversation
+                ? parent
+                : (parent.history.find(
+                    (entry) =>
+                      entry.sessionId === parentConversation?.sessionId,
+                  ) ?? child);
+            this.recordEvent(child, event, parent.messages, label, tokenOwner);
           }
         });
         child.sessionId = conversation.sessionId;
@@ -1102,6 +1116,7 @@ export class AgentApplication {
     saved?: SavedConversation,
   ): void {
     session.sessionId = saved?.sessionId;
+    session.generatedTokens = saved?.generatedTokens ?? 0;
     session.messages = saved?.messages.map((message) => ({ ...message })) ?? [];
     session.draft = saved?.draft ?? "";
     session.status = saved?.sessionId ? "saved" : "idle";
@@ -1140,6 +1155,7 @@ export class AgentApplication {
   private copyConversation(session: SavedConversation): SavedConversation {
     return {
       sessionId: session.sessionId,
+      generatedTokens: session.generatedTokens,
       draft: session.draft,
       messages: session.messages.map((message) => ({ ...message })),
       ...(session.postMortem
@@ -1248,7 +1264,23 @@ export class AgentApplication {
     event: SessionEvent,
     destination?: ChatMessage[],
     label?: string,
+    tokenOwner: Pick<SavedConversation, "generatedTokens"> = session,
   ): void {
+    if (event.type === "assistant.usage") {
+      const tokens = event.data.outputTokens;
+      const ownerTokens = tokenOwner.generatedTokens ?? 0;
+      if (
+        typeof tokens === "number" &&
+        Number.isSafeInteger(tokens) &&
+        tokens >= 0 &&
+        Number.isSafeInteger(session.generatedTokens + tokens) &&
+        Number.isSafeInteger(ownerTokens + tokens)
+      ) {
+        session.generatedTokens += tokens;
+        if (tokenOwner !== session)
+          tokenOwner.generatedTokens = ownerTokens + tokens;
+      }
+    }
     const addImage = (message: ChatMessage, image: ImageAttachment): void => {
       const images = (message.images ??= []);
       if (

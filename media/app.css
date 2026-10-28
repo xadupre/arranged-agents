@@ -250,6 +250,12 @@ body.resizing {
   white-space: nowrap;
 }
 
+#session-tokens {
+  flex-shrink: 0;
+  color: var(--vscode-descriptionForeground);
+  white-space: nowrap;
+}
+
 .chat-heading button {
   flex-shrink: 0;
 }

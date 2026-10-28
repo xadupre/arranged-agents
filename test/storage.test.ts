@@ -124,6 +124,31 @@ test("corrupt or mismatched history fails explicitly without overwriting the sav
   }
 });
 
+test("generated token counts are optional, round-trip in current and archived sessions, and reject invalid values", async (t) => {
+  const { directory, snapshot } = await setup(t);
+  const storage = new ApplicationStorage(directory, snapshot.root);
+  await storage.save(snapshot);
+  assert.equal((await storage.load())?.sessions[0]?.generatedTokens, undefined);
+  snapshot.sessions[0]!.generatedTokens = 1234;
+  snapshot.sessions[0]!.history = [
+    { draft: "", messages: [], generatedTokens: 0 },
+  ];
+  await storage.save(snapshot);
+  const loaded = await storage.load();
+  assert.equal(loaded?.sessions[0]?.generatedTokens, 1234);
+  assert.equal(loaded?.sessions[0]?.history?.[0]?.generatedTokens, 0);
+  for (const generatedTokens of [-1, 0.5, "12", null, 2 ** 53]) {
+    await writeFile(
+      storage.filename,
+      JSON.stringify({
+        ...snapshot,
+        sessions: [{ ...snapshot.sessions[0], generatedTokens }],
+      }),
+    );
+    await assert.rejects(storage.load(), /Invalid conversation/);
+  }
+});
+
 test("save failures propagate and a later save can retry after the storage directory is repaired", async (t) => {
   const { directory, snapshot } = await setup(t);
   const blocked = join(directory, "blocked");

@@ -74,6 +74,11 @@ Activity icons indicate session startup and requests in progress, including in
 background repositories. Drag either panel divider to resize it, or focus the
 divider and use the left/right arrow keys.
 
+A small counter beside the session status shows generated output tokens reported
+by Copilot, including subagents and parallel requests. It updates after each model
+call, survives reopening the conversation, and resets for a new session. Older
+conversations without a saved count start at zero; earlier usage is not estimated.
+
 The left panel follows the selected repository with five buttons:
 **Issues**, **Reviews** (pull requests), **Commits**, **Comments** and **Mentions**.
 Your issues/PRs have a distinct background; **Replied** marks your participation

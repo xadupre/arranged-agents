@@ -67,6 +67,36 @@ async function setup(t: TestContext) {
   return { dom, document, posted, publish, publishGitHub, state };
 }
 
+test("the session header shows generated tokens without adding a separate row and follows session changes", async (t) => {
+  const { document, publish, state } = await setup(t);
+  const counter = document.querySelector<HTMLElement>("#session-tokens")!;
+  publish(state);
+  assert.ok(counter.hidden);
+  state.activeId = "alpha";
+  publish(state);
+  assert.equal(counter.hidden, false);
+  assert.equal(counter.textContent, "0 tokens");
+  assert.equal(counter.parentElement?.className, "session-activity");
+  state.repositories[0]!.generatedTokens = 12345;
+  state.repositories[0]!.status = "busy";
+  publish(state);
+  assert.equal(counter.textContent, `${(12345).toLocaleString()} tokens`);
+  assert.match(counter.title, /Generated output tokens/);
+  state.activeId = "beta";
+  state.repositories[1]!.generatedTokens = 42;
+  publish(state);
+  assert.equal(counter.textContent, "42 tokens");
+  state.activeId = "alpha";
+  state.repositories[0]!.generation = 1;
+  state.repositories[0]!.generatedTokens = 0;
+  publish(state);
+  assert.equal(counter.textContent, "0 tokens");
+  state.activeId = undefined;
+  publish(state);
+  assert.ok(counter.hidden);
+  assert.equal(counter.textContent, "");
+});
+
 test(
   "image attachments preview, follow repository drafts, paste, remove and restore after rejected sends",
   { timeout: 5000 },

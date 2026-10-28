@@ -165,6 +165,89 @@ async function pid(directory: string): Promise<number> {
   return Number(await readFile(join(directory, "pid"), "utf8"));
 }
 
+test("generated tokens accumulate across calls, subagents and parallel work, persist and follow the selected session", async (t) => {
+  const { application, root, createApplication } = await setup(
+    t,
+    "persist-usage",
+  );
+  const alpha = join(root, "alpha");
+  const beta = join(root, "beta");
+  const tokens = (app: AgentApplication, id = alpha) =>
+    app.getState().repositories.find((repository) => repository.id === id)!
+      .generatedTokens;
+  await application.select(alpha);
+  assert.equal(tokens(application), 0);
+  await application.send(alpha, "First request");
+  assert.equal(tokens(application), 37);
+  const main = application.send(alpha, "Second request");
+  const parallel = application.send(alpha, "Parallel request");
+  await Promise.all([main, parallel]);
+  assert.equal(tokens(application), 111);
+  assert.equal(
+    application.getSnapshot().sessions.find((session) => session.id === alpha)
+      ?.history?.[0]?.generatedTokens,
+    37,
+  );
+  await application.select(beta);
+  assert.equal(tokens(application, beta), 0);
+  await application.send(beta, "Independent request");
+  assert.equal(tokens(application, beta), 37);
+  assert.equal(tokens(application), 111);
+  await application.dispose();
+
+  const storage = new ApplicationStorage(join(root, "storage"), root);
+  await storage.save(application.getSnapshot());
+  const restored = createApplication(await storage.load());
+  await restored.refresh();
+  assert.equal(tokens(restored), 111);
+  await restored.select(alpha);
+  assert.equal(tokens(restored), 111);
+  await restored.send(alpha, "Resumed request");
+  assert.equal(tokens(restored), 148);
+  await restored.restart(alpha);
+  assert.equal(tokens(restored), 0);
+  await restored.send(alpha, "Fresh request");
+  assert.equal(tokens(restored), 37);
+  await restored.newSession(alpha);
+  assert.equal(tokens(restored), 0);
+  await restored.deleteSessions(alpha, false);
+  assert.equal(tokens(restored), 37);
+});
+
+test("late parallel usage belongs to its archived conversation after a failed main session is replaced", async (t) => {
+  const { application, root, waitForPermission, waitForQuestion } = await setup(
+    t,
+    "permission-error",
+  );
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const originalId = application.getSnapshot().sessions[0]!.sessionId;
+  const mainRejected = assert.rejects(
+    application.send(alpha, "Fail after approval"),
+    /Main request failed/,
+  );
+  const permission = await waitForPermission(alpha);
+  await writeFile(join(alpha, "scenario"), "question-usage");
+  const parallel = application.send(alpha, "Continue in parallel");
+  const question = await waitForQuestion(alpha);
+  assert.equal(application.getState().repositories[0]?.generatedTokens, 20);
+  application.respondToPermission(permission.id, true);
+  await mainRejected;
+  await writeFile(join(alpha, "scenario"), "persist-usage");
+  await application.select(alpha);
+  assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
+  application.answerQuestion(question.id, "Targeted");
+  await parallel;
+  assert.equal(application.getState().repositories[0]?.generatedTokens, 0);
+  assert.equal(
+    application
+      .getSnapshot()
+      .sessions[0]?.history?.find((entry) => entry.sessionId === originalId)
+      ?.generatedTokens,
+    27,
+  );
+});
+
 test("PostMortems survive saving and session archives, and export the exact analysed conversation rather than later work", async (t) => {
   const { application, root, createApplication } = await setup(t, "persist");
   const alpha = join(root, "alpha");
