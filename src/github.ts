@@ -3,9 +3,10 @@ import { basename } from "node:path";
 import { promisify } from "node:util";
 import { isExternalUrl } from "./links";
 
-export type GitHubSection = "issues" | "reviews" | "comments" | "commits";
+export type GitHubSection =
+  "issues" | "reviews" | "comments" | "commits" | "mentions";
 export function isGitHubSection(value: unknown): value is GitHubSection {
-  return ["issues", "reviews", "comments", "commits"].some(
+  return ["issues", "reviews", "comments", "commits", "mentions"].some(
     (section) => section === value,
   );
 }
@@ -300,6 +301,33 @@ export class GitHubRepository {
       };
     }
     if (cursor) variables.cursor = cursor;
+    if (section === "mentions") {
+      variables.searchQuery = `repo:${nameWithOwner} mentions:${identity.viewer} sort:updated-desc`;
+      const data = await this.graphql(
+        identity,
+        `query($searchQuery:String!,$cursor:String) {
+          search(query:$searchQuery,type:ISSUE,first:20,after:$cursor) {
+            ${nextPageFields} nodes {
+              ... on Issue { ${issueFields} body createdAt }
+              ... on PullRequest { ${pullFields} body createdAt }
+            }
+          }
+        }`,
+        variables,
+        signal,
+      );
+      const page = connection(data.search);
+      return {
+        repository: nameWithOwner,
+        viewer: identity.viewer,
+        items: (
+          await this.items(page.nodes, identity, signal, true, true)
+        ).filter((item) => item.comments?.length),
+        cursor: page.cursor,
+        notice:
+          "Direct @mentions with no later comment or submitted review from you in the discussion. Includes closed issues and PRs; team mentions are excluded. Search indexing may delay results.",
+      };
+    }
     const field = section === "issues" ? "issues" : "pullRequests";
     const fields = section === "issues" ? issueFields : pullFields;
     const data = await this.graphql(
@@ -391,6 +419,7 @@ export class GitHubRepository {
     identity: Identity,
     signal: AbortSignal,
     includeComments: boolean,
+    pendingMentions = false,
   ): Promise<GitHubItem[]> {
     const result: GitHubItem[] = [];
     for (let offset = 0; offset < nodes.length; offset += 4) {
@@ -462,6 +491,41 @@ export class GitHubRepository {
                 !event.mine &&
                 Date.parse(event.date) > Date.parse(last.date),
               );
+            const mine =
+              author(node.author).toLowerCase() ===
+              identity.viewer.toLowerCase();
+            let displayed = events.filter(
+              (event) => event.mine || after(event),
+            );
+            if (pendingMentions) {
+              const candidates = [...events];
+              if (!mine) {
+                candidates.push({
+                  id,
+                  author: author(node.author),
+                  mine: false,
+                  body: text(node.body),
+                  date: date(node.createdAt),
+                  url: url(node.url),
+                });
+              }
+              displayed = candidates
+                .filter(
+                  (event) =>
+                    !event.mine &&
+                    (!last || Date.parse(event.date) > Date.parse(last.date)) &&
+                    [
+                      ...event.body.matchAll(
+                        /(?:^|[^\w@/])@([a-z\d](?:[a-z\d-]*[a-z\d])?)(?![\w/-])/gi,
+                      ),
+                    ].some(
+                      (match) =>
+                        match[1]!.toLowerCase() ===
+                        identity.viewer.toLowerCase(),
+                    ),
+                )
+                .sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+            }
             if (typeof node.number !== "number") {
               throw new Error("Invalid GitHub issue/PR number.");
             }
@@ -471,17 +535,13 @@ export class GitHubRepository {
               url: url(node.url),
               author: author(node.author),
               date:
-                includeComments && events[0]
-                  ? events[0].date
+                includeComments && displayed[0]
+                  ? displayed[0].date
                   : date(node.updatedAt),
-              mine:
-                author(node.author).toLowerCase() ===
-                identity.viewer.toLowerCase(),
+              mine,
               replied: own.length > 0,
               afterMe: events.some(after),
-              comments: includeComments
-                ? events.filter((event) => event.mine || after(event))
-                : undefined,
+              comments: includeComments ? displayed : undefined,
             };
           }),
         )),

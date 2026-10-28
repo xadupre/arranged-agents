@@ -74,12 +74,17 @@ Activity icons indicate session startup and requests in progress, including in
 background repositories. Drag either panel divider to resize it, or focus the
 divider and use the left/right arrow keys.
 
-The left panel follows the selected repository with four buttons:
-**Issues**, **Reviews** (pull requests), **Commits** and **Comments**.
+The left panel follows the selected repository with five buttons:
+**Issues**, **Reviews** (pull requests), **Commits**, **Comments** and **Mentions**.
 Your issues/PRs have a distinct background; **Replied** marks your participation
 and **After you** indicates a comment or submitted review after your latest response.
 **Comments** shows your comments/reviews plus subsequent responses, including closed
 discussions. **Commits** lists the latest 30 commits on the current local branch.
+**Mentions** shows direct `@username` pings in issue/PR descriptions, comments,
+submitted reviews and inline review comments, including closed discussions,
+with no later comment or submitted review from you in that discussion.
+Your own pings and team mentions are excluded. Search indexing may delay results;
+an empty page can still have **Load more** results.
 Click titles or comment timestamps to open their GitHub page in your browser.
 GitHub feeds require an installed, authenticated `gh` CLI (`gh auth login`).
 Use **Refresh** for new activity and **Load more** for older discussions.

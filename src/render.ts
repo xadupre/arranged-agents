@@ -112,6 +112,7 @@ export function renderApplication(resources: {
       <button type="button" data-section="reviews" aria-pressed="false">Reviews</button>
       <button type="button" data-section="commits" aria-pressed="false">Commits</button>
       <button type="button" data-section="comments" aria-pressed="false">Comments</button>
+      <button type="button" data-section="mentions" aria-pressed="false" title="Direct mentions you have not answered">Mentions</button>
     </nav>
     <div class="github-toolbar">
       <h2 id="github-heading">Issues</h2>

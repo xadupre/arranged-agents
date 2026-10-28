@@ -252,6 +252,162 @@ test("PR lists preserve ownership and review participation flags", async () => {
   );
 });
 
+test("mentions show only direct pings after the viewer's latest response, including descriptions", async () => {
+  const discussion = (
+    id: string,
+    comments: unknown[] = [],
+    body = "",
+    login = "other",
+  ) => ({ ...issue(id, login, comments), body, createdAt: when(1) });
+  const source = fixture((query, fields) => {
+    assert.match(query, /search\(query:\$searchQuery,type:ISSUE/);
+    assert.match(query, /on Issue.*body createdAt/);
+    assert.match(query, /on PullRequest.*body createdAt/);
+    assert.equal(
+      fields.searchQuery,
+      "repo:acme/project mentions:Ada sort:updated-desc",
+    );
+    assert.equal(fields.cursor, undefined);
+    return {
+      data: {
+        search: page([
+          discussion("description", [], "Please check, @aDA!"),
+          discussion("unanswered", [
+            comment("ping", "other", 5, "@Ada please reply"),
+          ]),
+          discussion(
+            "answered",
+            [
+              comment("ping", "other", 2, "@Ada"),
+              comment("reply", "aDA", 3),
+              comment("unrelated", "other", 4, "Not a new ping"),
+            ],
+            "@Ada",
+          ),
+          discussion("ping-again", [
+            comment("old-ping", "other", 2, "@Ada"),
+            comment("reply", "Ada", 3),
+            comment("new-ping", "other", 6, "(@ADA), another question"),
+            comment("unrelated", "other", 8),
+          ]),
+          discussion(
+            "own-ping",
+            [comment("self", "Ada", 9, "@Ada")],
+            "@Ada",
+            "Ada",
+          ),
+          discussion("not-direct", [
+            comment("email", "other", 9, "mail@Ada"),
+            comment("longer", "other", 9, "@Ada-other @Adam @Ada1"),
+            comment("team", "other", 9, "@Ada/team @org/Ada"),
+          ]),
+        ]),
+      },
+    };
+  });
+  const result = await new GitHubRepository(
+    "/projects/project",
+    source.run,
+  ).load("mentions", undefined, new AbortController().signal);
+  assert.deepEqual(
+    result.items.map((item) => item.id),
+    ["ping-again", "unanswered", "description"],
+  );
+  assert.deepEqual(
+    result.items.map((item) => item.comments?.map((entry) => entry.id)),
+    [["new-ping"], ["ping"], ["description"]],
+  );
+  assert.equal(result.items[0]?.date, when(6));
+  assert.equal(result.cursor, undefined);
+  assert.match(result.notice ?? "", /Includes closed/);
+  assert.equal(
+    parseApplicationMessage({ type: "github", id: "repo", section: "mentions" })
+      .type,
+    "github",
+  );
+});
+
+test("mentions paginate empty filtered pages and read older inline pings and submitted reviews", async () => {
+  const review = {
+    id: "review",
+    author: { login: "Ada" },
+    body: "",
+    state: "APPROVED",
+    submittedAt: when(4),
+    url: "https://github.com/acme/project/pull/1#review",
+    comments: history([], "inline-older"),
+  };
+  const pull = {
+    ...issue("pull"),
+    body: "",
+    createdAt: when(1),
+    reviews: history([
+      review,
+      { ...review, id: "draft", submittedAt: null, body: "@Ada" },
+    ]),
+  };
+  const { run } = fixture((query, fields) => {
+    if (query.includes("node(id:")) {
+      assert.equal(fields.id, "review");
+      assert.equal(fields.before, "inline-older");
+      return {
+        data: {
+          node: {
+            comments: history([comment("inline-ping", "other", 3, "@Ada")]),
+          },
+        },
+      };
+    }
+    if (fields.cursor) {
+      assert.equal(fields.cursor, "next-mentions");
+      return {
+        data: {
+          search: page([
+            {
+              ...pull,
+              reviews: history([
+                {
+                  ...review,
+                  comments: history([
+                    comment("pending-inline", "other", 5, "@Ada"),
+                  ]),
+                },
+                {
+                  ...review,
+                  id: "review-ping",
+                  author: { login: "other" },
+                  body: "@Ada please check",
+                  submittedAt: when(6),
+                  comments: history([]),
+                },
+              ]),
+            },
+          ]),
+        },
+      };
+    }
+    return { data: { search: page([pull], "next-mentions") } };
+  });
+  const repository = new GitHubRepository("/projects/project", run);
+  const first = await repository.load(
+    "mentions",
+    undefined,
+    new AbortController().signal,
+  );
+  assert.deepEqual(first.items, []);
+  assert.equal(first.cursor, "next-mentions");
+  const next = await repository.load(
+    "mentions",
+    first.cursor,
+    new AbortController().signal,
+  );
+  assert.equal(next.cursor, undefined);
+  assert.deepEqual(
+    next.items[0]?.comments?.map((entry) => entry.id),
+    ["review-ping", "pending-inline"],
+  );
+});
+
 test("issue and PR lists sort by update time, while merged comment searches sort by the latest displayed response", async () => {
   const older = {
     ...issue("older", "Ada", [comment("old-response", "Ada", 2)]),

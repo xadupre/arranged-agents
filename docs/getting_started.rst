@@ -192,8 +192,8 @@ an interrupted runtime may retain its normal CLI-side session history.
 Browse repository activity
 --------------------------
 
-The left panel has four buttons: **Issues**, **Reviews** (pull requests),
-**Commits** and **Comments**. It follows the repository selected on the right.
+The left panel has five buttons: **Issues**, **Reviews** (pull requests),
+**Commits**, **Comments** and **Mentions**. It follows the repository selected on the right.
 GitHub reads do not send prompts to Copilot or consume model requests.
 
 Issues and PRs you created have a tinted background and a **Yours** marker.
@@ -202,6 +202,11 @@ posted after your latest response in that discussion. The Comments view shows
 your own comments/reviews and others' comments after your latest response,
 including closed issues and PRs. Inline review replies are included; draft reviews
 are not. These are timestamp-based activity flags, not read/unread tracking.
+**Mentions** shows direct ``@username`` pings in descriptions, comments, submitted
+reviews and inline review comments without a later comment or submitted review
+from you in that discussion. Closed issues/PRs are included; your own pings and
+team mentions are excluded. Search indexing may delay results. Use **Load more**
+even on an empty page to check older discussions.
 
 Click any issue/PR title or comment author/timestamp to open its GitHub permalink.
 Commits shows the latest 30 commits on the current local branch; click a commit to

@@ -203,7 +203,12 @@ test("sidebar tabs request separate feeds and safely display comments and commit
     await setup(t);
   state.activeId = "alpha";
   publish(state);
-  for (const section of ["reviews", "commits", "comments"] as const) {
+  for (const section of [
+    "reviews",
+    "commits",
+    "comments",
+    "mentions",
+  ] as const) {
     document
       .querySelector<HTMLButtonElement>(
         `#github-tabs [data-section="${section}"]`,
@@ -238,7 +243,7 @@ test("sidebar tabs request separate feeds and safely display comments and commit
             replied: false,
             afterMe: false,
             comments:
-              section === "comments"
+              section === "comments" || section === "mentions"
                 ? [
                     {
                       id: "own",
@@ -265,7 +270,7 @@ test("sidebar tabs request separate feeds and safely display comments and commit
       }),
     );
     assert.deepEqual(posted.at(-1), { type: "openExternal", url });
-    if (section === "comments") {
+    if (section === "comments" || section === "mentions") {
       assert.equal(document.querySelector("#github-items script"), null);
       assert.match(
         document.querySelector(".github-comment-body")?.textContent ?? "",
@@ -306,7 +311,13 @@ test("all sidebar feeds remain newest-first after pagination and duplicate updat
     [...document.querySelectorAll(".github-item h3")].map(
       (heading) => heading.textContent,
     );
-  for (const section of ["issues", "reviews", "comments", "commits"] as const) {
+  for (const section of [
+    "issues",
+    "reviews",
+    "comments",
+    "commits",
+    "mentions",
+  ] as const) {
     document
       .querySelector<HTMLButtonElement>(
         `#github-tabs [data-section="${section}"]`,
@@ -347,6 +358,56 @@ test("all sidebar feeds remain newest-first after pagination and duplicate updat
   }
 });
 
+test("an empty Mentions page still allows loading older pings and refreshing", async (t) => {
+  const { document, posted, publish, publishGitHub, state } = await setup(t);
+  state.activeId = "alpha";
+  publish(state);
+  document
+    .querySelector<HTMLButtonElement>('#github-tabs [data-section="mentions"]')
+    ?.click();
+  assert.equal(
+    document.getElementById("github-heading")?.textContent,
+    "Mentions",
+  );
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "mentions",
+    status: "ready",
+    append: false,
+    page: { repository: "acme/project", items: [], cursor: "older-pings" },
+  });
+  assert.equal(
+    document.getElementById("github-items")?.textContent,
+    "No unanswered mentions in this page.",
+  );
+  const more = document.querySelector<HTMLButtonElement>("#github-more");
+  assert.equal(more?.hidden, false);
+  more?.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "mentions",
+    cursor: "older-pings",
+  });
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "mentions",
+    status: "ready",
+    append: true,
+    page: { repository: "acme/project", items: [] },
+  });
+  assert.equal(more?.hidden, true);
+  document.querySelector<HTMLButtonElement>("#github-refresh")?.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "mentions",
+    cursor: undefined,
+  });
+});
+
 test("the tab has activity navigation and starts no session until a repository is clicked", async (t) => {
   const { document, posted, publish, state } = await setup(t);
   assert.equal(
@@ -359,7 +420,7 @@ test("the tab has activity navigation and starts no session until a repository i
     [...document.querySelectorAll("#github-tabs button")].map(
       (button) => button.textContent,
     ),
-    ["Issues", "Reviews", "Commits", "Comments"],
+    ["Issues", "Reviews", "Commits", "Comments", "Mentions"],
   );
   assert.deepEqual(
     posted.filter((message) => message.type !== "github"),
