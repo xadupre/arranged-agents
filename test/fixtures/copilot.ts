@@ -21,6 +21,7 @@ interface Request {
 
 const scenario = readFileSync("scenario", "utf8");
 writeFileSync("pid", String(process.pid));
+if (scenario.startsWith("crash:")) appendFileSync("pids", `${process.pid}\n`);
 let buffer = Buffer.alloc(0);
 const prompts: string[] = [];
 let pendingSend: number | undefined;
@@ -64,6 +65,27 @@ function reply(id: number, result: unknown, error?: string): void {
   });
 }
 
+function crashIfRequested(request: Request): boolean {
+  if (scenario !== `crash:${request.method}` || !existsSync("crashes-left"))
+    return false;
+  const remaining = Number(readFileSync("crashes-left", "utf8"));
+  if (remaining <= 0) return false;
+  writeFileSync("crashes-left", String(remaining - 1));
+  if (request.method === "session.sendAndWait") {
+    notify(request.params?.sessionId, "assistant.message_delta", {
+      messageId: "interrupted-answer",
+      deltaContent: "Partial answer before the crash",
+    });
+    notify(request.params?.sessionId, "tool.execution_start", {
+      toolCallId: "interrupted-tool",
+      toolName: "bash",
+      arguments: { command: "printf checkpoint" },
+    });
+  }
+  process.stdout.write("", () => process.exit(17));
+  return true;
+}
+
 function handle(request: Request): void {
   appendFileSync("requests.jsonl", `${JSON.stringify(request)}\n`);
   if (scenario === "question" && request.id === -1) {
@@ -86,12 +108,18 @@ function handle(request: Request): void {
   if (request.id === undefined || scenario === `hang:${request.method}`) {
     return;
   }
+  if (request.method !== "session.sendAndWait" && crashIfRequested(request))
+    return;
   switch (request.method) {
     case "connect":
       reply(request.id, { protocolVersion: 3 });
       break;
     case "session.create":
-      if (scenario.startsWith("persist") || scenario === "postmortem") {
+      if (
+        scenario.startsWith("persist") ||
+        scenario.startsWith("crash:") ||
+        scenario === "postmortem"
+      ) {
         writeFileSync(`history-${request.params?.sessionId}.json`, "[]");
       }
       if (scenario === "events") {
@@ -189,7 +217,18 @@ function handle(request: Request): void {
         });
         break;
       }
-      if (scenario === "permission" || scenario === "permission-error") {
+      if (
+        scenario === "permission" ||
+        scenario === "permission-error" ||
+        scenario === "crash:permission"
+      ) {
+        if (scenario === "crash:permission") {
+          prompts.push(request.params?.prompt ?? "");
+          writeFileSync(
+            `history-${request.params?.sessionId}.json`,
+            JSON.stringify(prompts),
+          );
+        }
         pendingSend = request.id;
         transmit({
           jsonrpc: "2.0",
@@ -211,7 +250,7 @@ function handle(request: Request): void {
         break;
       }
       prompts.push(request.params?.prompt ?? "");
-      if (scenario.startsWith("persist")) {
+      if (scenario.startsWith("persist") || scenario.startsWith("crash:")) {
         writeFileSync(
           `history-${request.params?.sessionId}.json`,
           JSON.stringify(prompts),
@@ -220,6 +259,7 @@ function handle(request: Request): void {
           break;
         }
       }
+      if (crashIfRequested(request)) break;
       if (scenario === "events") {
         const sessionId = request.params?.sessionId;
         const messageId = `message-${prompts.length}`;
@@ -310,7 +350,9 @@ function handle(request: Request): void {
             content:
               scenario === "empty"
                 ? " "
-                : scenario === "conversation" || scenario.startsWith("persist")
+                : scenario === "conversation" ||
+                    scenario.startsWith("persist") ||
+                    scenario.startsWith("crash:")
                   ? `## Fixture answer\n\n${prompts.join("\n\n")}`
                   : "## Fixture answer",
           },

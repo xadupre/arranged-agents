@@ -94,6 +94,18 @@ async function setup(
     changes: () => changes,
     snapshots,
     createApplication,
+    waitForRecovery: async () => {
+      const signal = AbortSignal.timeout(10_000);
+      for (;;) {
+        if (
+          application
+            .getState()
+            .messages.some((message) => message.title === "Copilot recovery")
+        )
+          return;
+        await once(updates, "change", { signal });
+      }
+    },
     waitForPermission: async (repositoryId: string, except?: string) => {
       for (;;) {
         const request = application
@@ -1219,6 +1231,240 @@ test("a startup timeout is visible, reaps the CLI and allows an explicit restart
     "ready",
   );
   assert.equal(application.getState().messages[0]?.role, "system");
+});
+
+test("a crashed process resumes its session without replaying the original prompt, then drains queued work", async (t) => {
+  const { application, root, waitForRecovery } = await setup(
+    t,
+    "crash:session.sendAndWait",
+    15_000,
+  );
+  const alpha = join(root, "alpha");
+  await writeFile(join(alpha, "crashes-left"), "1");
+  await application.select(alpha);
+  const originalPid = await pid(alpha);
+  const sessionId = application.getSnapshot().sessions[0]?.sessionId;
+  const sending = application.send(alpha, "Finish the original task");
+  await waitForRecovery();
+  const queued = application.send(alpha, "Run this only after recovery", false);
+  await Promise.all([sending, queued]);
+  const log = await requests(alpha);
+  assert.equal(
+    log.filter((request) => request.method === "session.create").length,
+    1,
+  );
+  assert.deepEqual(
+    log
+      .filter((request) => request.method === "session.resume")
+      .map((request) => request.params?.sessionId),
+    [sessionId],
+  );
+  const prompts = log
+    .filter((request) => request.method === "session.sendAndWait")
+    .map((request) => request.params?.prompt);
+  assert.equal(prompts.length, 3);
+  assert.notEqual(prompts[1], prompts[0]);
+  assert.match(prompts[1] ?? "", /Do not blindly repeat commands/);
+  assert.ok(prompts[1]?.includes(prompts[0]!));
+  assert.match(prompts[2] ?? "", /Run this only after recovery/);
+  const state = application.getState();
+  assert.equal(state.repositories[0]?.status, "ready");
+  assert.equal(state.error, undefined);
+  assert.equal(
+    state.messages.filter((message) => message.role === "user").length,
+    2,
+  );
+  assert.ok(
+    state.messages.some(
+      (message) =>
+        message.error && /Automatic recovery 1\/3/.test(message.content),
+    ),
+  );
+  assert.ok(
+    state.messages.some(
+      (message) => message.title === "bash - interrupted" && message.error,
+    ),
+  );
+  assert.ok(
+    state.messages.some(
+      (message) => message.content === "Partial answer before the crash",
+    ),
+  );
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+  assert.throws(() => process.kill(originalPid, 0), { code: "ESRCH" });
+});
+
+test("repeated process crashes stop after three restarts and preserve context for explicit recovery", async (t) => {
+  const { application, root } = await setup(
+    t,
+    "crash:session.sendAndWait",
+    15_000,
+  );
+  const alpha = join(root, "alpha");
+  await writeFile(join(alpha, "crashes-left"), "4");
+  await application.select(alpha);
+  const sessionId = application.getSnapshot().sessions[0]?.sessionId;
+  await assert.rejects(
+    application.send(alpha, "Keep the failed task"),
+    /after 3 automatic restarts/,
+  );
+  const log = await requests(alpha);
+  assert.equal(log.filter((request) => request.method === "connect").length, 4);
+  assert.equal(
+    log.filter((request) => request.method === "session.resume").length,
+    3,
+  );
+  assert.equal(
+    log.filter((request) => request.method === "session.create").length,
+    1,
+  );
+  assert.equal(application.getState().repositories[0]?.status, "error");
+  assert.equal(application.getState().draft, "Keep the failed task");
+  assert.ok(
+    application
+      .getState()
+      .messages.filter((message) => message.role === "tool")
+      .every((message) => message.title?.endsWith(" - interrupted")),
+  );
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+  const pids = (await readFile(join(alpha, "pids"), "utf8"))
+    .trim()
+    .split("\n")
+    .map(Number);
+  for (const child of pids)
+    assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+  await application.select(alpha);
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+});
+
+test("cancelling or closing during crash recovery prevents another process or prompt from starting", async (t) => {
+  for (const action of ["cancel", "dispose"]) {
+    await t.test(action, async (t) => {
+      const { application, root, waitForRecovery } = await setup(
+        t,
+        "crash:session.sendAndWait",
+        15_000,
+      );
+      const alpha = join(root, "alpha");
+      await writeFile(join(alpha, "crashes-left"), "4");
+      await application.select(alpha);
+      const sending = application.send(alpha, "Cancel this recovery");
+      const cancelled = assert.rejects(sending, { name: "AbortError" });
+      await waitForRecovery();
+      if (action === "cancel") application.cancel(alpha);
+      else await application.dispose();
+      await cancelled;
+      const log = await requests(alpha);
+      assert.equal(
+        log.filter((request) => request.method === "connect").length,
+        1,
+      );
+      assert.equal(
+        log.filter((request) => request.method === "session.sendAndWait")
+          .length,
+        1,
+      );
+      const child = Number(
+        (await readFile(join(alpha, "pids"), "utf8")).trim(),
+      );
+      assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+    });
+  }
+});
+
+test("an idle process crash reconnects on the next message without losing the previous context", async (t) => {
+  const { application, root } = await setup(
+    t,
+    "crash:session.sendAndWait",
+    15_000,
+  );
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  await application.send(alpha, "Remember the first request");
+  process.kill(await pid(alpha), "SIGKILL");
+  await application.send(alpha, "Now complete the second request");
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  const answer = application.getState().messages.at(-1)?.content ?? "";
+  assert.match(answer, /Remember the first request/);
+  assert.match(answer, /Now complete the second request/);
+  assert.equal(
+    (await requests(alpha)).filter(
+      (request) => request.method === "session.create",
+    ).length,
+    1,
+  );
+});
+
+test("a parallel process recovers independently without stopping the main request", async (t) => {
+  const { application, root } = await setup(t, "persist-hang", 15_000);
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const mainPid = await pid(alpha);
+  const main = application.send(alpha, "Keep working in the main session");
+  const cancelled = assert.rejects(main, { name: "AbortError" });
+  await waitForRequest(alpha, "session.sendAndWait");
+  await writeFile(join(alpha, "scenario"), "crash:session.sendAndWait");
+  await writeFile(join(alpha, "crashes-left"), "1");
+  await application.send(alpha, "Recover only this side request");
+  assert.equal(application.getState().repositories[0]?.status, "busy");
+  assert.ok(
+    application
+      .getState()
+      .messages.some((message) =>
+        message.title?.includes(": Copilot recovery"),
+      ),
+  );
+  assert.doesNotThrow(() => process.kill(mainPid, 0));
+  application.cancel(alpha);
+  await cancelled;
+});
+
+test("a crash while awaiting approval discards the obsolete permission and requires a fresh decision after recovery", async (t) => {
+  const { application, root, waitForPermission } = await setup(
+    t,
+    "crash:permission",
+    15_000,
+  );
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const child = await pid(alpha);
+  const sending = application.send(alpha, "Continue after explicit approval");
+  const original = await waitForPermission(alpha);
+  process.kill(child, "SIGKILL");
+  const recovered = await waitForPermission(alpha, original.id);
+  assert.notEqual(recovered.id, original.id);
+  assert.equal(application.getState().permissions.length, 1);
+  assert.throws(
+    () => application.respondToPermission(original.id, true),
+    /no longer pending/,
+  );
+  application.respondToPermission(recovered.id, true);
+  await sending;
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.deepEqual(application.getState().permissions, []);
+});
+
+test("startup process crashes are retried but authentication errors are not", async (t) => {
+  for (const scenario of ["crash:connect", "unauthenticated"]) {
+    await t.test(scenario, async (t) => {
+      const { application, root } = await setup(t, scenario, 15_000);
+      const alpha = join(root, "alpha");
+      await writeFile(join(alpha, "crashes-left"), "1");
+      if (scenario === "unauthenticated")
+        await assert.rejects(application.select(alpha), /Not authenticated/);
+      else {
+        await application.select(alpha);
+        assert.equal(application.getState().repositories[0]?.status, "ready");
+      }
+      assert.equal(
+        (await requests(alpha)).filter(
+          (request) => request.method === "connect",
+        ).length,
+        scenario === "unauthenticated" ? 1 : 2,
+      );
+    });
+  }
 });
 
 test("unknown paths and malformed UI messages cannot start sessions", async (t) => {

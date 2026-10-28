@@ -223,6 +223,36 @@ body.resizing {
   border-bottom: 1px solid var(--vscode-panel-border);
 }
 
+.chat-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.chat-heading h2 {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-heading .session-activity {
+  min-width: 0;
+  margin: 0;
+}
+
+#session-status {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-heading button {
+  flex-shrink: 0;
+}
+
 #information-filters {
   display: flex;
   flex-wrap: wrap;

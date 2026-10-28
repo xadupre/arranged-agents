@@ -85,10 +85,11 @@ export function renderApplication(resources: {
   <div id="left-divider" class="divider" role="separator" aria-label="Resize left panel" aria-orientation="vertical" aria-controls="left-panel chat-panel" tabindex="0"></div>
   <section id="chat-panel" aria-label="Copilot conversation">
     <header class="chat-header">
-      <h1>Arranged Agents</h1>
-      <h2 id="active-repository">Select a repository on the right</h2>
-      <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
-      <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
+      <div class="chat-heading">
+        <h2 id="active-repository">Select a repository on the right</h2>
+        <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
+        <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
+      </div>
       <fieldset id="information-filters">
         <legend>Show information</legend>
         <label><input type="checkbox" value="messages" checked> Messages</label>
