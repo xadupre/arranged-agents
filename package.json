@@ -61,7 +61,7 @@
     "smoke": "npm run compile && node dist/scripts/smoke.js",
     "check": "npm run format:check && npm run lint && npm test",
     "vscode:prepublish": "npm run compile",
-    "package": "vsce package --allow-missing-license"
+    "package": "vsce package --skip-license"
   },
   "dependencies": {
     "@github/copilot-sdk": "1.0.27",

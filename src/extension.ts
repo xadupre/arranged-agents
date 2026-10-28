@@ -4,6 +4,7 @@ import { buildPrompt, MAX_SELECTION_LENGTH, validateQuestion } from "./prompt";
 import { renderResult } from "./render";
 
 let activeRequest: AbortController | undefined;
+let activeOperation: Promise<string> | undefined;
 
 export function activate(context: vscode.ExtensionContext): void {
   const output = vscode.window.createOutputChannel("Arranged Agents");
@@ -82,13 +83,15 @@ export function activate(context: vscode.ExtensionContext): void {
               controller.abort();
             }
             try {
-              return await askCopilot(prompt, {
+              activeOperation = askCopilot(prompt, {
                 cliPath: configuration.get<string>("cliPath", "copilot"),
                 model: configuration.get<string>("model", "").trim(),
                 workingDirectory: context.globalStorageUri.fsPath,
                 signal: controller.signal,
               });
+              return await activeOperation;
             } finally {
+              activeOperation = undefined;
               subscription.dispose();
             }
           },
@@ -116,6 +119,9 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 }
 
-export function deactivate(): void {
+export async function deactivate(): Promise<void> {
   activeRequest?.abort();
+  if (activeOperation) {
+    await Promise.allSettled([activeOperation]);
+  }
 }
