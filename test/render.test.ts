@@ -237,7 +237,7 @@ test("conversation image caches follow attachments without interpreting user or 
     const before = renderer.render("alpha", [message])[0]!.html;
     assert.match(before, /\*literal\* &lt;script&gt;/);
     assert.match(before, /<img /);
-    assert.doesNotMatch(before, /<script>|<em>/);
+    assert.doesNotMatch(before, /<script\b|<em\b/i);
     assert.match(before, /alt="&quot;&gt;&lt;script&gt;/);
     message.images![0]!.name = "Updated description";
     assert.match(
