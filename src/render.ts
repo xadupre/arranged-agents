@@ -65,7 +65,23 @@ export function renderApplication(resources: {
 </head>
 <body>
 <main class="application">
-  <aside id="left-panel" aria-label="Reserved panel"></aside>
+  <aside id="left-panel" aria-label="Repository activity">
+    <nav id="github-tabs" aria-label="Repository activity views">
+      <button type="button" data-section="issues" aria-pressed="true">Issues</button>
+      <button type="button" data-section="reviews" aria-pressed="false">Reviews</button>
+      <button type="button" data-section="commits" aria-pressed="false">Commits</button>
+      <button type="button" data-section="comments" aria-pressed="false">Comments</button>
+    </nav>
+    <div class="github-toolbar">
+      <h2 id="github-heading">Issues</h2>
+      <button id="github-refresh" type="button" disabled>Refresh</button>
+    </div>
+    <p id="github-status" role="status">Select a repository to view its activity.</p>
+    <p id="github-notice" class="repository-hint" hidden></p>
+    <p id="github-error" role="alert" hidden></p>
+    <div id="github-items"></div>
+    <button id="github-more" type="button" hidden>Load more</button>
+  </aside>
   <div id="left-divider" class="divider" role="separator" aria-label="Resize left panel" aria-orientation="vertical" aria-controls="left-panel chat-panel" tabindex="0"></div>
   <section id="chat-panel" aria-label="Copilot conversation">
     <header class="chat-header">
