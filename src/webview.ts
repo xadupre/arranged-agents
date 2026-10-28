@@ -932,29 +932,36 @@ declare function acquireVsCodeApi(): {
     questions.hidden = pending.length === 0;
   }
 
+  const renderedMessages: {
+    message: State["messages"][number];
+    article: HTMLElement;
+    showEventDetails: boolean;
+  }[] = [];
+  let scrollFrame: number | undefined;
+
   function renderMessages(switched = false): void {
+    if (scrollFrame !== undefined) {
+      window.cancelAnimationFrame(scrollFrame);
+      scrollFrame = undefined;
+    }
     const showEventDetails =
       filters.querySelector<HTMLInputElement>('input[value="system"]')
         ?.checked !== false;
     const scrollTop = messages.scrollTop;
     const nearBottom =
       messages.scrollHeight - messages.scrollTop - messages.clientHeight < 60;
-    const expanded = new Set(
-      [...messages.querySelectorAll<HTMLDetailsElement>("details[open]")].map(
-        (details) => details.parentElement?.dataset.index,
-      ),
-    );
-    messages.replaceChildren();
+    if (switched) {
+      messages.replaceChildren();
+      renderedMessages.length = 0;
+    }
+    while (renderedMessages.length > (state?.messages.length ?? 0)) {
+      renderedMessages.pop()!.article.remove();
+    }
+    let lastVisibleMessage: HTMLElement | undefined;
     for (const [index, message] of (state?.messages ?? []).entries()) {
       const failed =
         message.error ||
         (message.role === "output" && message.title?.endsWith(": failed"));
-      const article = document.createElement("article");
-      article.className = `message ${message.role}`;
-      if (failed) {
-        article.classList.add("failed");
-      }
-      article.dataset.index = String(index);
       const category =
         message.role === "tool" &&
         (message.title === "assistant.tool_call_delta" ||
@@ -967,7 +974,42 @@ declare function acquireVsCodeApi(): {
       const filter = filters.querySelector<HTMLInputElement>(
         `input[value="${category}"]`,
       );
-      article.hidden = !failed && filter?.checked === false;
+      const hidden = !failed && filter?.checked === false;
+      const cached = renderedMessages[index];
+      if (
+        cached &&
+        cached.showEventDetails === showEventDetails &&
+        (
+          [
+            "role",
+            "content",
+            "title",
+            "timestamp",
+            "agentId",
+            "details",
+            "error",
+            "html",
+          ] as const
+        ).every((key) => cached.message[key] === message[key])
+      ) {
+        if (cached.article.hidden !== hidden) {
+          cached.article.hidden = hidden;
+        }
+        if (!hidden) {
+          lastVisibleMessage = cached.article;
+        }
+        continue;
+      }
+      const article = document.createElement("article");
+      article.className = `message ${message.role}`;
+      if (failed) {
+        article.classList.add("failed");
+      }
+      article.dataset.index = String(index);
+      article.hidden = hidden;
+      if (!hidden) {
+        lastVisibleMessage = article;
+      }
       const heading = document.createElement("h3");
       heading.textContent =
         (message.title ?? roleLabels[message.role]) +
@@ -995,7 +1037,7 @@ declare function acquireVsCodeApi(): {
       if (message.details) {
         const details = document.createElement("details");
         details.hidden = !showEventDetails;
-        details.open = !switched && expanded.has(String(index));
+        details.open = cached?.article.querySelector("details")?.open === true;
         const summary = document.createElement("summary");
         summary.textContent = "Event details";
         const data = document.createElement("pre");
@@ -1003,10 +1045,25 @@ declare function acquireVsCodeApi(): {
         details.append(summary, data);
         article.append(details);
       }
-      messages.append(article);
+      if (cached) {
+        cached.article.replaceWith(article);
+      } else {
+        messages.append(article);
+      }
+      renderedMessages[index] = { message, article, showEventDetails };
     }
     if (switched || nearBottom) {
       messages.scrollTop = messages.scrollHeight;
+      const pendingScrollTop = messages.scrollTop;
+      // Resolve skipped content after layout has updated its estimated heights.
+      scrollFrame = window.requestAnimationFrame?.(() => {
+        scrollFrame = undefined;
+        if (messages.scrollTop < pendingScrollTop) {
+          return;
+        }
+        lastVisibleMessage?.scrollIntoView?.({ block: "end" });
+        messages.scrollTop = messages.scrollHeight;
+      });
     } else {
       messages.scrollTop = scrollTop;
     }

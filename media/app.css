@@ -320,6 +320,8 @@ h2 {
 }
 
 .message {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 160px;
   margin-bottom: 20px;
   line-height: 1.6;
   overflow-wrap: anywhere;
