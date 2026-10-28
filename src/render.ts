@@ -169,7 +169,7 @@ export function renderApplication(resources: {
     <header class="chat-header">
       <div class="chat-heading">
         <h2 id="active-repository">Select a repository on the right</h2>
-        <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
+        <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span><small id="session-tokens" hidden></small></p>
         <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
         <button id="settings" type="button" title="Open Arranged Agents settings">Settings</button>
       </div>

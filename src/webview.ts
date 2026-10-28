@@ -321,6 +321,13 @@ declare function acquireVsCodeApi(): {
           (active.parallelCount ? ` (${active.parallelCount} parallel)` : "") +
           (active.queuedCount ? ` (${active.queuedCount} queued)` : "")
       : "No Copilot session has started.";
+    const tokens = element("session-tokens", HTMLElement);
+    tokens.hidden = !active;
+    tokens.textContent = active
+      ? `${(active.generatedTokens ?? 0).toLocaleString()} tokens`
+      : "";
+    tokens.title =
+      "Generated output tokens reported for this session, including subagents and parallel requests.";
     question.placeholder = active
       ? `Ask Copilot about ${active.name}...`
       : "Select a repository to begin.";

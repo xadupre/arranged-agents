@@ -7,6 +7,7 @@ import { parseImages } from "./images";
 
 export interface SavedConversation {
   sessionId?: string;
+  generatedTokens?: number;
   draft: string;
   messages: ChatMessage[];
   postMortem?: PostMortem;
@@ -49,6 +50,10 @@ function parseConversation(value: unknown): SavedConversation {
     typeof value.draft !== "string" ||
     (value.sessionId !== undefined &&
       (typeof value.sessionId !== "string" || !value.sessionId)) ||
+    (value.generatedTokens !== undefined &&
+      (typeof value.generatedTokens !== "number" ||
+        !Number.isSafeInteger(value.generatedTokens) ||
+        value.generatedTokens < 0)) ||
     !Array.isArray(value.messages) ||
     !value.messages.every(isMessage)
   ) {
@@ -65,6 +70,9 @@ function parseConversation(value: unknown): SavedConversation {
   }
   return {
     sessionId: value.sessionId,
+    ...(value.generatedTokens !== undefined
+      ? { generatedTokens: value.generatedTokens }
+      : {}),
     draft: value.draft,
     messages: value.messages.map((message) => ({
       role: message.role,

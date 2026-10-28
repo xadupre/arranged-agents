@@ -26,6 +26,7 @@ if (scenario.startsWith("crash:")) appendFileSync("pids", `${process.pid}\n`);
 let buffer = Buffer.alloc(0);
 const prompts: string[] = [];
 let pendingSend: number | undefined;
+let pendingSessionId: string | undefined;
 let eventSequence = 0;
 
 function notify(
@@ -67,7 +68,16 @@ function reply(id: number, result: unknown, error?: string): void {
 }
 
 function crashIfRequested(request: Request): boolean {
-  if (scenario !== `crash:${request.method}` || !existsSync("crashes-left"))
+  if (
+    (scenario !== `crash:${request.method}` &&
+      !(
+        scenario === "late-parallel-recovery" &&
+        request.method === "session.sendAndWait" &&
+        request.params?.prompt?.includes("Fail the main request") &&
+        !request.params.prompt.includes("Keep the parallel request open")
+      )) ||
+    !existsSync("crashes-left")
+  )
     return false;
   const remaining = Number(readFileSync("crashes-left", "utf8"));
   if (remaining <= 0) return false;
@@ -89,9 +99,22 @@ function crashIfRequested(request: Request): boolean {
 
 function handle(request: Request): void {
   appendFileSync("requests.jsonl", `${JSON.stringify(request)}\n`);
-  if (scenario === "question" && request.id === -1) {
+  if (
+    (scenario.startsWith("question") ||
+      scenario === "late-parallel-recovery") &&
+    request.id === -1
+  ) {
     if (pendingSend === undefined) {
       throw new Error("User answer without a pending request.");
+    }
+    if (
+      scenario === "question-usage" ||
+      scenario === "late-parallel-recovery"
+    ) {
+      notify(pendingSessionId, "assistant.usage", {
+        model: "fixture",
+        outputTokens: 7,
+      });
     }
     reply(pendingSend, {
       response: {
@@ -119,6 +142,7 @@ function handle(request: Request): void {
       if (
         scenario.startsWith("persist") ||
         scenario.startsWith("crash:") ||
+        scenario === "late-parallel-recovery" ||
         scenario === "postmortem"
       ) {
         writeFileSync(`history-${request.params?.sessionId}.json`, "[]");
@@ -176,6 +200,29 @@ function handle(request: Request): void {
       break;
     }
     case "session.sendAndWait":
+      if (scenario === "persist-usage") {
+        for (const outputTokens of [
+          10,
+          20,
+          0,
+          undefined,
+          -1,
+          1.5,
+          Number.MAX_SAFE_INTEGER,
+        ]) {
+          notify(request.params?.sessionId, "assistant.usage", {
+            model: "fixture",
+            inputTokens: 1000,
+            outputTokens,
+          });
+        }
+        notify(
+          request.params?.sessionId,
+          "assistant.usage",
+          { model: "fixture", outputTokens: 7 },
+          "child-agent",
+        );
+      }
       if (scenario === "postmortem") {
         const entries: unknown[] = JSON.parse(
           request.params?.prompt?.split("\n").at(-1) ?? "[]",
@@ -203,7 +250,37 @@ function handle(request: Request): void {
         });
         break;
       }
-      if (scenario === "question") {
+      if (scenario.startsWith("question")) {
+        pendingSessionId = request.params?.sessionId;
+        if (scenario === "question-usage") {
+          notify(request.params?.sessionId, "assistant.usage", {
+            model: "fixture",
+            outputTokens: 20,
+          });
+        }
+        pendingSend = request.id;
+        transmit({
+          jsonrpc: "2.0",
+          id: -1,
+          method: "userInput.request",
+          params: {
+            sessionId: request.params?.sessionId,
+            question: "Which test suite should run?",
+            choices: ["Targeted", "All"],
+            allowFreeform: true,
+          },
+        });
+        break;
+      }
+      if (
+        scenario === "late-parallel-recovery" &&
+        request.params?.prompt?.includes("Keep the parallel request open")
+      ) {
+        pendingSessionId = request.params?.sessionId;
+        notify(request.params?.sessionId, "assistant.usage", {
+          model: "fixture",
+          outputTokens: 20,
+        });
         pendingSend = request.id;
         transmit({
           jsonrpc: "2.0",
@@ -251,7 +328,11 @@ function handle(request: Request): void {
         break;
       }
       prompts.push(request.params?.prompt ?? "");
-      if (scenario.startsWith("persist") || scenario.startsWith("crash:")) {
+      if (
+        scenario.startsWith("persist") ||
+        scenario.startsWith("crash:") ||
+        scenario === "late-parallel-recovery"
+      ) {
         writeFileSync(
           `history-${request.params?.sessionId}.json`,
           JSON.stringify(prompts),
