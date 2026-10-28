@@ -11,7 +11,7 @@ import {
 } from "../src/application";
 import { CopilotConversation } from "../src/conversation";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
-import { waitForRequest } from "./helpers";
+import { testImage, waitForRequest } from "./helpers";
 import { describePermission } from "../src/presentation";
 import { generatePostMortem, type PostMortemSource } from "../src/postmortem";
 
@@ -140,10 +140,20 @@ async function setup(
   };
 }
 
-async function requests(
-  directory: string,
-): Promise<
-  { method: string; params?: { sessionId?: string; prompt?: string } }[]
+async function requests(directory: string): Promise<
+  {
+    method: string;
+    params?: {
+      sessionId?: string;
+      prompt?: string;
+      attachments?: {
+        type: string;
+        data: string;
+        mimeType: string;
+        displayName: string;
+      }[];
+    };
+  }[]
 > {
   return (await readFile(join(directory, "requests.jsonl"), "utf8"))
     .trim()
@@ -291,6 +301,119 @@ test("PostMortem waits for completed work and shutdown or removal cannot attach 
       );
     });
   }
+});
+
+test("image-only messages reach the SDK and structured tool images are retained safely", async (t) => {
+  const { application, root } = await setup(t, "images");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const message = parseApplicationMessage({
+    type: "send",
+    id: alpha,
+    question: "",
+    images: [testImage],
+  });
+  assert.equal(message.type, "send");
+  if (message.type !== "send") return;
+  await application.send(
+    message.id,
+    message.question,
+    message.parallel,
+    message.images,
+  );
+  const sent = (await requests(alpha)).find(
+    (request) => request.method === "session.sendAndWait",
+  );
+  assert.equal(sent?.params?.prompt, "Describe the attached images.");
+  assert.deepEqual(sent?.params?.attachments, [
+    {
+      type: "blob",
+      displayName: testImage.name,
+      mimeType: "image/png",
+      data: testImage.dataUrl.split(",")[1],
+    },
+  ]);
+  const messages = application.getState().messages;
+  assert.deepEqual(messages.find((entry) => entry.role === "user")?.images, [
+    testImage,
+  ]);
+  const output = messages.find((entry) => entry.role === "output");
+  assert.equal(output?.content, "Generated *image*, not Markdown");
+  assert.deepEqual(output?.images, [
+    { ...testImage, name: "Tool image" },
+    {
+      name: "Tool image",
+      dataUrl: testImage.dataUrl.replace("image/png", "image/gif"),
+    },
+    {
+      name: "Tool image",
+      dataUrl: testImage.dataUrl.replace("image/png", "image/jpeg"),
+    },
+    {
+      name: "Tool image",
+      dataUrl: testImage.dataUrl.replace("image/png", "image/webp"),
+    },
+  ]);
+  assert.deepEqual(application.getSnapshot().sessions[0]?.messages, messages);
+  assert.throws(
+    () =>
+      parseApplicationMessage({
+        type: "send",
+        id: alpha,
+        question: "Bad image",
+        images: [{}],
+      }),
+    /Attach up to five/,
+  );
+  await assert.rejects(
+    application.send(alpha, "Bad image", true, [
+      { ...testImage, dataUrl: "file:///private.png" },
+    ]),
+    /Attach up to five/,
+  );
+});
+
+test("queued and parallel image requests preserve their own SDK attachments", async (t) => {
+  const { application, root, waitForPermission } = await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const main = application.send(alpha, "Main image", true, [testImage]);
+  const mainPermission = await waitForPermission(alpha);
+  const queuedImage = { ...testImage, name: "queued.png" };
+  const queued = application.send(alpha, "Queued image", false, [queuedImage]);
+  const parallelImage = { ...testImage, name: "parallel.png" };
+  const parallel = application.send(alpha, "Parallel image", true, [
+    parallelImage,
+  ]);
+  const parallelPermission = await waitForPermission(alpha, mainPermission.id);
+  application.respondToPermission(parallelPermission.id, true);
+  await parallel;
+  application.respondToPermission(mainPermission.id, true);
+  await main;
+  const queuedPermission = await waitForPermission(alpha);
+  application.respondToPermission(queuedPermission.id, true);
+  await queued;
+  const sends = (await requests(alpha)).filter(
+    (request) => request.method === "session.sendAndWait",
+  );
+  assert.deepEqual(
+    sends.map((request) => request.params?.attachments),
+    [testImage, parallelImage, queuedImage].map((image) => [
+      {
+        type: "blob",
+        displayName: image.name,
+        mimeType: "image/png",
+        data: image.dataUrl.split(",")[1],
+      },
+    ]),
+  );
+  assert.deepEqual(
+    application
+      .getState()
+      .messages.filter((message) => message.role === "user")
+      .map((message) => message.images?.[0]?.name),
+    [testImage.name, queuedImage.name, parallelImage.name],
+  );
 });
 
 test("parallel questions run immediately with visible context and isolated approvals, while OFF messages drain FIFO", async (t) => {

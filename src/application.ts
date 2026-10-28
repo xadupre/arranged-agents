@@ -3,6 +3,12 @@ import { CopilotRecoveryError, type Conversation } from "./conversation";
 import { buildPrompt, MAX_PROMPT_LENGTH, MAX_SELECTION_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
+import {
+  isImageDataUrl,
+  MAX_IMAGES,
+  parseImages,
+  type ImageAttachment,
+} from "./images";
 import { describeTool } from "./presentation";
 import { isGitHubSection, type GitHubSection } from "./github";
 import {
@@ -33,6 +39,7 @@ export interface ChatMessage {
   agentId?: string;
   details?: string;
   error?: boolean;
+  images?: ImageAttachment[];
 }
 export interface ApplicationState {
   root: string;
@@ -82,6 +89,10 @@ interface RepositorySession {
   generation: number;
   removed?: boolean;
   eventMessages: Map<string, ChatMessage>;
+  imageAssets?: Map<
+    string,
+    { image?: ImageAttachment; messages: Set<ChatMessage> }
+  >;
   postMortem?: PostMortem;
   postMortemError?: string;
   postMortemOperation?: { controller: AbortController; promise: Promise<void> };
@@ -115,7 +126,13 @@ export type ApplicationMessage =
   | { type: "permission"; id: string; approve: boolean }
   | { type: "answer"; id: string; answer: string }
   | { type: "openExternal"; url: string }
-  | { type: "send"; id: string; question: string; parallel?: boolean };
+  | {
+      type: "send";
+      id: string;
+      question: string;
+      parallel?: boolean;
+      images?: ImageAttachment[];
+    };
 
 export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (!value || typeof value !== "object" || !("type" in value)) {
@@ -208,6 +225,9 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
       type: "send",
       id: value.id,
       question: value.question,
+      ...("images" in value && value.images !== undefined
+        ? { images: parseImages(value.images) }
+        : {}),
       ...("parallel" in value && typeof value.parallel === "boolean"
         ? { parallel: value.parallel }
         : {}),
@@ -661,6 +681,7 @@ export class AgentApplication {
         const conversation = this.createConversation(session.repository);
         session.conversation = conversation;
         session.eventMessages.clear();
+        session.imageAssets?.clear();
         await conversation.start(
           controller.signal,
           (event) => {
@@ -697,7 +718,15 @@ export class AgentApplication {
     return session.starting;
   }
 
-  async send(id: string, question: string, parallel = true): Promise<void> {
+  async send(
+    id: string,
+    question: string,
+    parallel = true,
+    images?: ImageAttachment[],
+  ): Promise<void> {
+    images = images === undefined ? undefined : parseImages(images);
+    if (!question.trim() && images?.length)
+      question = "Describe the attached images.";
     this.assertOpen();
     const session = this.getSession(id);
     this.assertAvailable(session);
@@ -713,12 +742,13 @@ export class AgentApplication {
     }
     const prompt = buildPrompt(question);
     if (session.status === "busy" || session.parallel.size) {
-      if (parallel) return this.sendParallel(session, question);
+      if (parallel) return this.sendParallel(session, question, images);
       return new Promise<void>((resolve, reject) => {
         const message: ChatMessage = {
           role: "user",
           content: question.trim(),
           title: "Queued - after current work",
+          ...(images?.length ? { images } : {}),
         };
         session.queue.push({ question, prompt, message, resolve, reject });
         session.messages.push(message);
@@ -726,7 +756,7 @@ export class AgentApplication {
         this.onChange();
       });
     }
-    return this.sendMain(session, question, prompt);
+    return this.sendMain(session, question, prompt, undefined, images);
   }
 
   private async sendMain(
@@ -734,12 +764,18 @@ export class AgentApplication {
     question: string,
     prompt: string,
     queuedMessage?: ChatMessage,
+    images = queuedMessage?.images,
   ): Promise<void> {
     const conversation = session.conversation;
     if (!conversation) throw new Error("The repository session is not open.");
     const id = session.repository.id;
     if (queuedMessage) queuedMessage.title = "Sent after current work";
-    else session.messages.push({ role: "user", content: question.trim() });
+    else
+      session.messages.push({
+        role: "user",
+        content: question.trim(),
+        ...(images?.length ? { images } : {}),
+      });
     session.draft = "";
     session.status = "busy";
     session.error = undefined;
@@ -749,7 +785,11 @@ export class AgentApplication {
     const requestStart = session.messages.length;
     const run = async (): Promise<void> => {
       try {
-        const answer = await conversation.send(prompt, controller.signal);
+        const answer = await conversation.send(
+          prompt,
+          controller.signal,
+          images,
+        );
         if (
           !session.messages
             .slice(requestStart)
@@ -792,6 +832,7 @@ export class AgentApplication {
   private async sendParallel(
     parent: RepositorySession,
     question: string,
+    images?: ImageAttachment[],
   ): Promise<void> {
     const requestId = randomUUID();
     const label = `Parallel ${requestId.slice(0, 8)}`;
@@ -819,6 +860,7 @@ export class AgentApplication {
       role: "user",
       title: label,
       content: question.trim(),
+      ...(images?.length ? { images } : {}),
     };
     const controller = new AbortController();
     const child: RepositorySession = {
@@ -852,7 +894,11 @@ export class AgentApplication {
         child.sessionId = conversation.sessionId;
         child.status = "busy";
         this.onChange();
-        const answer = await conversation.send(prompt, controller.signal);
+        const answer = await conversation.send(
+          prompt,
+          controller.signal,
+          images,
+        );
         if (
           !child.messages.some(
             (message) =>
@@ -1047,6 +1093,7 @@ export class AgentApplication {
     session.error = undefined;
     session.status = session.sessionId ? "saved" : "idle";
     session.eventMessages.clear();
+    session.imageAssets?.clear();
   }
 
   private restoreConversation(
@@ -1060,6 +1107,7 @@ export class AgentApplication {
     session.error = undefined;
     session.generation++;
     session.eventMessages.clear();
+    session.imageAssets?.clear();
     session.postMortem = saved?.postMortem
       ? structuredClone(saved.postMortem)
       : undefined;
@@ -1200,6 +1248,24 @@ export class AgentApplication {
     destination?: ChatMessage[],
     label?: string,
   ): void {
+    const addImage = (message: ChatMessage, image: ImageAttachment): void => {
+      const images = (message.images ??= []);
+      if (
+        images.length < MAX_IMAGES &&
+        !images.some((other) => other.dataUrl === image.dataUrl)
+      ) {
+        images.push(image);
+      }
+    };
+    const imageAsset = (id: string) => {
+      const assets = (session.imageAssets ??= new Map());
+      let asset = assets.get(id);
+      if (!asset) {
+        asset = { messages: new Set() };
+        assets.set(id, asset);
+      }
+      return asset;
+    };
     const push = (message: ChatMessage): void => {
       if (label)
         message.title = message.title ? `${label}: ${message.title}` : label;
@@ -1230,6 +1296,17 @@ export class AgentApplication {
       }
     };
     switch (event.type) {
+      case "session.binary_asset": {
+        if (event.data.type !== "image") return;
+        const dataUrl = `data:${event.data.mimeType};base64,${event.data.data}`;
+        if (!isImageDataUrl(dataUrl)) return;
+        const asset = imageAsset(event.data.assetId);
+        asset.image = { name: "Tool image", dataUrl };
+        for (const message of asset.messages) addImage(message, asset.image);
+        asset.messages.clear();
+        this.onChange(true);
+        return;
+      }
       case "user.message":
         return;
       case "assistant.message_start":
@@ -1339,6 +1416,23 @@ export class AgentApplication {
               .join("\n") ||
             (event.data.success ? "Completed" : "Tool execution failed.");
           message.details = JSON.stringify(event.data, null, 2);
+          const result = event.data.result;
+          for (const part of [
+            ...(result?.contents ?? []),
+            ...(result?.binaryResultsForLlm ?? []),
+          ]) {
+            if (part.type !== "image") continue;
+            if ("data" in part) {
+              const dataUrl = `data:${part.mimeType};base64,${part.data}`;
+              if (isImageDataUrl(dataUrl)) {
+                addImage(message, { name: "Tool image", dataUrl });
+              }
+            } else if ("assetId" in part) {
+              const asset = imageAsset(part.assetId);
+              if (asset.image) addImage(message, asset.image);
+              else asset.messages.add(message);
+            }
+          }
         } else if (event.type === "tool.execution_partial_result") {
           upsert(
             `partial:${event.data.toolCallId}`,
@@ -1370,6 +1464,7 @@ export class AgentApplication {
       }
     }
     session.eventMessages.clear();
+    session.imageAssets?.clear();
   }
 
   private fail(session: RepositorySession, error: unknown): void {

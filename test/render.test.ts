@@ -5,9 +5,12 @@ import {
   renderMarkdown,
   renderResult,
   renderText,
+  renderApplication,
 } from "../src/render";
 import { describePermission, describeTool } from "../src/presentation";
 import type { ChatMessage } from "../src/application";
+import { isImageDataUrl, MAX_IMAGE_BYTES, parseImages } from "../src/images";
+import { testImage } from "./helpers";
 
 test("cached conversation HTML follows edited content and roles while retaining fresh metadata and avoiding stale session entries", () => {
   const renderer = new ConversationRenderer();
@@ -122,7 +125,7 @@ test("plain tool output preserves command syntax and only linkifies safe URLs", 
   assert.doesNotMatch(html, /<script|<em>|href="command:/);
 });
 
-test("renders clickable HTTP URLs but blocks executable links and remote images", () => {
+test("renders clickable HTTP URLs and HTTPS images but blocks executable links", () => {
   const html = renderResult(
     "Links",
     "[Run](command:workbench.action.terminal.new)\n\n" +
@@ -138,12 +141,110 @@ test("renders clickable HTTP URLs but blocks executable links and remote images"
     /<a href="https:\/\/example.com" target="_blank" rel="noopener noreferrer">External<\/a>/,
   );
   assert.match(html, /href="http:\/\/example.org\/path"/);
-  assert.doesNotMatch(
+  assert.doesNotMatch(html, /href="(?:command:|javascript:|file:|vscode:)/);
+  assert.match(
     html,
-    /href="(?:command:|javascript:|file:|vscode:)|<img\b|src=/,
+    /<img src="https:\/\/attacker.invalid\/collect" alt="secret"/,
   );
-  assert.match(html, /secret/);
   const nonce = /<style nonce="([^"]+)">/.exec(html)?.[1];
   assert.ok(nonce);
-  assert.ok(html.includes(`default-src 'none'; style-src 'nonce-${nonce}'`));
+  assert.ok(html.includes(`style-src 'nonce-${nonce}'`));
+});
+
+test("image validation limits payloads and only accepts embedded raster images", () => {
+  assert.deepEqual(parseImages([testImage]), [testImage]);
+  for (const value of [
+    null,
+    {},
+    [null],
+    [{ ...testImage, name: "" }],
+    [{ ...testImage, name: "x".repeat(256) }],
+    Array(6).fill(testImage),
+    [{ ...testImage, dataUrl: "https://example.com/image.png" }],
+    [{ ...testImage, dataUrl: "data:image/svg+xml;base64,PHN2Zz4=" }],
+    [{ ...testImage, dataUrl: "data:text/html;base64,PHNjcmlwdD4=" }],
+    [{ ...testImage, dataUrl: "data:image/png;base64,invalid!" }],
+    [{ ...testImage, dataUrl: "data:image/png;base64,YQ=" }],
+    [{ ...testImage, dataUrl: "data:image/png;base64," }],
+    [
+      {
+        ...testImage,
+        dataUrl: `data:image/png;base64,${Buffer.alloc(MAX_IMAGE_BYTES + 1).toString("base64")}`,
+      },
+    ],
+  ]) {
+    assert.throws(() => parseImages(value), /Attach up to five/);
+  }
+  assert.ok(
+    isImageDataUrl(
+      `data:image/png;base64,${Buffer.alloc(MAX_IMAGE_BYTES).toString("base64")}`,
+    ),
+  );
+  for (const type of ["jpeg", "gif", "webp"]) {
+    assert.ok(
+      isImageDataUrl(testImage.dataUrl.replace("image/png", `image/${type}`)),
+    );
+  }
+});
+
+test("Markdown images escape attributes and reject local, insecure and active sources", () => {
+  const html = renderMarkdown(
+    `![pixel](${testImage.dataUrl} "Preview")\n\n` +
+      '![a"b](https://example.com/image.png "c\\"d")\n\n' +
+      "![insecure](http://example.com/image.png)\n\n" +
+      "![local](file:///tmp/image.png)\n\n" +
+      "![relative](image.png)\n\n" +
+      "![credentials](https://user@example.com/image.png)\n\n" +
+      "![vector](data:image/svg+xml;base64,PHN2Zz4=)\n\n" +
+      `[not a link](${testImage.dataUrl})\n\n` +
+      "```md\n![literal](https://example.com/not-loaded.png)\n```",
+  );
+  assert.match(
+    html,
+    /alt="pixel" title="Preview" loading="lazy" referrerpolicy="no-referrer"/,
+  );
+  assert.match(html, /alt="a&quot;b" title="c&quot;d"/);
+  assert.equal((html.match(/<img /g) ?? []).length, 2);
+  assert.doesNotMatch(
+    html,
+    /(?:src|href)="(?:http:|file:|data:image\/svg|image\.png|https:\/\/user@)/,
+  );
+  assert.doesNotMatch(html, /href="data:/);
+});
+
+test("both windows allow images through CSP while retaining script restrictions", () => {
+  for (const html of [
+    renderResult("Question", `![pixel](${testImage.dataUrl})`),
+    renderApplication({
+      cspSource: "https://webview.invalid",
+      scriptUri: "https://webview.invalid/webview.js",
+      styleUri: "https://webview.invalid/app.css",
+    }),
+  ]) {
+    assert.match(html, /default-src 'none'; img-src https: data:;/);
+    assert.doesNotMatch(html, /unsafe-inline|unsafe-eval|img-src \*/);
+  }
+});
+
+test("conversation image caches follow attachments without interpreting user or output text as Markdown", () => {
+  const renderer = new ConversationRenderer();
+  for (const role of ["user", "output"] as const) {
+    const message: ChatMessage = {
+      role,
+      content: "*literal* <script>bad()</script>",
+      images: [{ ...testImage, name: '"><script>bad()</script>' }],
+    };
+    const before = renderer.render("alpha", [message])[0]!.html;
+    assert.match(before, /\*literal\* &lt;script&gt;/);
+    assert.match(before, /<img /);
+    assert.doesNotMatch(before, /<script>|<em>/);
+    assert.match(before, /alt="&quot;&gt;&lt;script&gt;/);
+    message.images![0]!.name = "Updated description";
+    assert.match(
+      renderer.render("alpha", [message])[0]!.html,
+      /alt="Updated description"/,
+    );
+    message.images = [];
+    assert.doesNotMatch(renderer.render("alpha", [message])[0]!.html, /<img /);
+  }
 });

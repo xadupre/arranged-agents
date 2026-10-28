@@ -58,12 +58,22 @@ no automatic approval is granted. Relevant file/tool results may be sent to Copi
 authentication and GitHub access rights apply.
 
 The application's own script is authorized by a CSP nonce; model responses
-cannot introduce scripts. Raw HTML is escaped and images are not loaded.
+cannot introduce scripts. Raw HTML is escaped. Use **Attach images** or paste
+images into the message box to send PNG, JPEG, GIF or WebP images to Copilot
+(up to five images, 5 MiB each). Images can be sent without text. Attachment
+previews can be removed and stay with their repository while switching tabs;
+unsent image drafts are not saved across application restarts. Sent images
+are saved with the conversation, including queued and parallel requests.
+Markdown images in replies and the result window, and structured tool-result
+images in **Output**, are displayed at a bounded size. HTTPS images load
+remotely without a referrer; embedded images are limited to the raster formats
+above. Local files, HTTP image sources and embedded SVG/HTML are not loaded.
 HTTP/HTTPS URLs open externally through VS Code after host-side validation;
 executable and local-file schemes are rejected. Tool output is escaped plain
 text with safe URL detection, not interpreted as Markdown or HTML.
 Math rendering disables trusted TeX commands.
-Only packaged UI resources are available, without remote fonts or scripts.
+Only packaged UI resources and the supported images are available, without
+remote fonts or scripts.
 
 The log displays events and readable reasoning supplied by the CLI; it cannot
 expose reasoning or tool information that the CLI does not emit. Only messages

@@ -5,8 +5,10 @@ import { test, type TestContext } from "node:test";
 import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
 import type { ApplicationMessage, ApplicationState } from "../src/application";
-import { renderApplication, renderMarkdown, renderText } from "../src/render";
+import { ConversationRenderer, renderApplication } from "../src/render";
 import type { GitHubUpdate, GitHubPage } from "../src/github";
+import { testImage } from "./helpers";
+import { MAX_IMAGE_BYTES } from "../src/images";
 
 async function setup(t: TestContext) {
   const posted: ApplicationMessage[] = [];
@@ -29,6 +31,7 @@ async function setup(t: TestContext) {
   new Script(await readFile(scriptPath, "utf8"), {
     filename: scriptPath,
   }).runInContext(dom.getInternalVMContext());
+  const renderer = new ConversationRenderer();
   const publish = (state: ApplicationState): void => {
     dom.window.dispatchEvent(
       new dom.window.MessageEvent("message", {
@@ -36,13 +39,7 @@ async function setup(t: TestContext) {
           type: "state",
           state: structuredClone({
             ...state,
-            messages: state.messages.map((message) => ({
-              ...message,
-              html:
-                message.role === "assistant" || message.role === "reasoning"
-                  ? renderMarkdown(message.content)
-                  : renderText(message.content),
-            })),
+            messages: renderer.render(state.activeId, state.messages),
           }),
         },
       }),
@@ -69,6 +66,154 @@ async function setup(t: TestContext) {
   };
   return { dom, document, posted, publish, publishGitHub, state };
 }
+
+test(
+  "image attachments preview, follow repository drafts, paste, remove and restore after rejected sends",
+  { timeout: 5000 },
+  async (t) => {
+    const { dom, document, posted, publish, state } = await setup(t);
+    state.activeId = "alpha";
+    state.repositories[0]!.status = "ready";
+    state.repositories[1]!.status = "ready";
+    publish(state);
+    const input = document.querySelector<HTMLInputElement>("#images")!;
+    const send = document.querySelector<HTMLButtonElement>("#send")!;
+    const question = document.querySelector<HTMLTextAreaElement>("#question")!;
+    const file = new dom.window.File(
+      [Buffer.from(testImage.dataUrl.split(",")[1]!, "base64")],
+      testImage.name,
+      { type: "image/png" },
+    );
+    const changed = () =>
+      new Promise<void>((resolve) => {
+        const observer = new dom.window.MutationObserver(() => {
+          observer.disconnect();
+          resolve();
+        });
+        observer.observe(document.querySelector("#image-previews")!, {
+          childList: true,
+        });
+      });
+    Object.defineProperty(input, "files", {
+      configurable: true,
+      value: [file],
+    });
+    let previewChanged = changed();
+    input.dispatchEvent(new dom.window.Event("change"));
+    assert.ok(send.disabled, "reading images must block submission");
+    await previewChanged;
+    assert.equal(
+      document.querySelector<HTMLImageElement>("#image-previews img")?.src,
+      testImage.dataUrl,
+    );
+    assert.equal(send.disabled, false, "image-only prompts can be sent");
+
+    state.activeId = "beta";
+    publish(state);
+    assert.equal(document.querySelector("#image-previews img"), null);
+    state.activeId = "alpha";
+    publish(state);
+    assert.ok(document.querySelector("#image-previews img"));
+    document
+      .querySelector<HTMLButtonElement>("#image-previews button")!
+      .click();
+    assert.equal(document.querySelector("#image-previews img"), null);
+    assert.ok(send.disabled);
+
+    const paste = new dom.window.Event("paste", { cancelable: true });
+    Object.defineProperty(paste, "clipboardData", {
+      value: {
+        items: [{ kind: "file", type: file.type, getAsFile: () => file }],
+      },
+    });
+    previewChanged = changed();
+    question.dispatchEvent(paste);
+    assert.ok(paste.defaultPrevented);
+    await previewChanged;
+    send.click();
+    const sent = posted.find((message) => message.type === "send");
+    assert.deepEqual(sent, {
+      type: "send",
+      id: "alpha",
+      question: "",
+      parallel: true,
+      images: [testImage],
+    });
+    assert.equal(document.querySelector("#image-previews img"), null);
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: { type: "error", id: "alpha", message: "Request rejected" },
+      }),
+    );
+    assert.ok(document.querySelector("#image-previews img"));
+    assert.equal(send.disabled, false);
+    state.repositories[0]!.generation = 1;
+    publish(state);
+    assert.equal(document.querySelector("#image-previews img"), null);
+  },
+);
+
+test("image controls reject unsupported types, empty files, oversized files and too many attachments", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  const input = document.querySelector<HTMLInputElement>("#images")!;
+  assert.ok(input.disabled);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  publish(state);
+  for (const files of [
+    [new dom.window.File(["<svg/>"], "unsafe.svg", { type: "image/svg+xml" })],
+    [new dom.window.File([], "empty.png", { type: "image/png" })],
+    [
+      new dom.window.File(["x".repeat(MAX_IMAGE_BYTES + 1)], "large.png", {
+        type: "image/png",
+      }),
+    ],
+    Array.from(
+      { length: 6 },
+      () => new dom.window.File(["x"], "image.png", { type: "image/png" }),
+    ),
+  ]) {
+    Object.defineProperty(input, "files", { configurable: true, value: files });
+    input.dispatchEvent(new dom.window.Event("change"));
+    assert.match(
+      document.querySelector("#error")!.textContent!,
+      /Attach up to five/,
+    );
+    assert.equal(document.querySelector("#image-previews img"), null);
+    assert.ok(document.querySelector<HTMLButtonElement>("#send")!.disabled);
+  }
+});
+
+test("dialog and tool-output images render and unchanged image articles survive streaming", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.messages = [
+    { role: "user", content: "An image", images: [testImage] },
+    { role: "assistant", content: `![response](${testImage.dataUrl})` },
+    { role: "output", content: "*literal* output", images: [testImage] },
+  ];
+  publish(state);
+  const outputFilter = document.querySelector<HTMLInputElement>(
+    'input[value="output"]',
+  )!;
+  outputFilter.checked = true;
+  outputFilter.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  assert.equal(document.querySelectorAll(".message img").length, 3);
+  assert.equal(
+    document.querySelector(".output .content")!.textContent,
+    "*literal* output",
+  );
+  const first = document.querySelector(".message");
+  state.messages[1]!.content += "\n\nMore text.";
+  publish(state);
+  assert.equal(document.querySelector(".message"), first);
+  state.messages[0]!.images = [];
+  publish(state);
+  assert.equal(
+    document.querySelector(".message img"),
+    document.querySelector(".assistant img"),
+  );
+});
 
 test("transcript selections survive state updates and streamed Markdown without intercepting native copy", async (t) => {
   const { dom, document, publish, state } = await setup(t);
