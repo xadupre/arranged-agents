@@ -897,7 +897,9 @@ export class AgentApplication {
         await conversation.start(controller.signal, (event) => {
           if (!this.closed && parent.parallel.get(requestId) === child) {
             const tokenOwner =
-              parent.conversation === parentConversation
+              parent.conversation === parentConversation ||
+              (parent.sessionId !== undefined &&
+                parent.sessionId === parentConversation?.sessionId)
                 ? parent
                 : (parent.history.find(
                     (entry) =>

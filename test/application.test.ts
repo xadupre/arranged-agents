@@ -248,6 +248,38 @@ test("late parallel usage belongs to its archived conversation after a failed ma
   );
 });
 
+test("late parallel usage stays with its session after explicit recovery", async (t) => {
+  const { application, root, waitForRecovery, waitForQuestion } = await setup(
+    t,
+    "late-parallel-recovery",
+    15_000,
+  );
+  const alpha = join(root, "alpha");
+  await writeFile(join(alpha, "crashes-left"), "4");
+  await application.select(alpha);
+  const sessionId = application.getSnapshot().sessions[0]?.sessionId;
+  const mainRejected = assert.rejects(
+    application.send(alpha, "Fail the main request"),
+    /after 3 automatic restarts/,
+  );
+  await waitForRecovery();
+  const parallel = application.send(alpha, "Keep the parallel request open");
+  const question = await waitForQuestion(alpha);
+  assert.equal(application.getState().repositories[0]?.generatedTokens, 20);
+  await mainRejected;
+  await application.select(alpha);
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+  application.answerQuestion(question.id, "Targeted");
+  await parallel;
+  assert.equal(application.getState().repositories[0]?.generatedTokens, 27);
+  assert.equal(
+    application
+      .getSnapshot()
+      .sessions[0]?.history?.some((entry) => entry.sessionId === sessionId),
+    false,
+  );
+});
+
 test("PostMortems survive saving and session archives, and export the exact analysed conversation rather than later work", async (t) => {
   const { application, root, createApplication } = await setup(t, "persist");
   const alpha = join(root, "alpha");
