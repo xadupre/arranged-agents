@@ -12,6 +12,7 @@ body {
   background: var(--vscode-editor-background);
   font-family: var(--vscode-font-family);
   font-size: var(--vscode-font-size);
+  user-select: text;
 }
 
 #postmortem-report {
