@@ -34,6 +34,30 @@ declare function acquireVsCodeApi(): {
   const composer = element("composer", HTMLFormElement);
   const filters = element("information-filters", HTMLFieldSetElement);
   const repositoryMenu = element("repository-menu", HTMLElement);
+  const githubTabs = element("github-tabs", HTMLElement);
+  const githubItems = element("github-items", HTMLElement);
+  const githubRefresh = element("github-refresh", HTMLButtonElement);
+  const githubMore = element("github-more", HTMLButtonElement);
+  type GitHubSection = import("./github").GitHubSection;
+  type GitHubPage = import("./github").GitHubPage;
+  type GitHubUpdate = import("./github").GitHubUpdate;
+  const githubLabels: Record<GitHubSection, string> = {
+    issues: "Issues",
+    reviews: "Reviews",
+    comments: "Comments",
+    commits: "Commits",
+  };
+  let githubSection: GitHubSection = "issues";
+  const githubPages = new Map<
+    string,
+    {
+      status: GitHubUpdate["status"];
+      page?: GitHubPage;
+      error?: string;
+    }
+  >();
+  let githubRenderedKey: string | undefined;
+  let githubRenderedPage: object | undefined;
   let menuRepositoryId: string | undefined;
   let menuConfirmation:
     "delete-last-session" | "delete-all-sessions" | undefined;
@@ -324,7 +348,157 @@ declare function acquireVsCodeApi(): {
     showError(state.error);
     updateControls();
     updateRepositoryMenu();
+    renderGitHub();
   }
+
+  function githubKey(id: string): string {
+    return JSON.stringify([id, githubSection]);
+  }
+
+  function requestGitHub(more = false): void {
+    const id = state?.activeId;
+    if (!id) return;
+    const key = githubKey(id);
+    const previous = githubPages.get(key);
+    const cursor = more ? previous?.page?.cursor : undefined;
+    githubPages.set(key, {
+      status: "loading",
+      page: more ? previous?.page : undefined,
+    });
+    renderGitHub();
+    vscode.postMessage({ type: "github", id, section: githubSection, cursor });
+  }
+
+  function renderGitHub(): void {
+    const id = state?.activeId;
+    const key = id ? githubKey(id) : githubSection;
+    const entry = id ? githubPages.get(key) : undefined;
+    if (id && !entry) {
+      requestGitHub();
+      return;
+    }
+    if (key === githubRenderedKey && entry === githubRenderedPage) return;
+    githubRenderedKey = key;
+    githubRenderedPage = entry;
+    for (const button of githubTabs.querySelectorAll<HTMLButtonElement>(
+      "button",
+    )) {
+      button.setAttribute(
+        "aria-pressed",
+        String(button.dataset.section === githubSection),
+      );
+    }
+    element("github-heading", HTMLElement).textContent =
+      githubLabels[githubSection];
+    githubRefresh.disabled = !id || entry?.status === "loading";
+    githubMore.hidden = !entry?.page?.cursor;
+    githubMore.disabled = entry?.status === "loading";
+    const status = element("github-status", HTMLElement);
+    status.textContent = !id
+      ? "Select a repository to view its activity."
+      : entry?.status === "loading"
+        ? "Loading repository activity..."
+        : entry?.page
+          ? `${entry.page.repository}${entry.page.viewer ? ` - ${entry.page.viewer}` : ""} (${entry.page.items.length})`
+          : "";
+    githubItems.setAttribute("aria-busy", String(entry?.status === "loading"));
+    const failure = element("github-error", HTMLElement);
+    failure.textContent = entry?.error ?? "";
+    failure.hidden = !entry?.error;
+    const notice = element("github-notice", HTMLElement);
+    notice.textContent = entry?.page?.notice ?? "";
+    notice.hidden = !notice.textContent;
+    githubItems.replaceChildren();
+    const link = (label: string, href?: string): HTMLElement => {
+      const node = document.createElement(href ? "a" : "span");
+      node.textContent = label;
+      if (node instanceof HTMLAnchorElement && href) {
+        node.href = href;
+        node.title = "Open on GitHub";
+      }
+      return node;
+    };
+    for (const item of entry?.page?.items ?? []) {
+      const card = document.createElement("article");
+      card.className = "github-item";
+      card.classList.toggle("github-mine", item.mine);
+      const heading = document.createElement("h3");
+      heading.append(link(item.title, item.url));
+      const metadata = document.createElement("p");
+      metadata.className = "github-metadata";
+      const time = document.createElement("time");
+      time.dateTime = item.date;
+      time.textContent = new Date(item.date).toLocaleString();
+      metadata.append(document.createTextNode(`${item.author} - `), time);
+      const badges = document.createElement("div");
+      badges.className = "github-badges";
+      for (const [show, label, title, className] of [
+        [item.mine, "Yours", "You created this issue or PR.", "mine"],
+        [
+          item.replied,
+          "Replied",
+          "You commented or submitted a review.",
+          "replied",
+        ],
+        [
+          item.afterMe,
+          "After you",
+          "Someone posted after your latest response.",
+          "after-me",
+        ],
+      ] as const) {
+        if (!show) continue;
+        const badge = document.createElement("span");
+        badge.className = `github-badge ${className}`;
+        badge.textContent = label;
+        badge.title = title;
+        badges.append(badge);
+      }
+      card.append(heading, metadata, badges);
+      for (const comment of item.comments ?? []) {
+        const block = document.createElement("section");
+        block.className = "github-comment";
+        block.classList.toggle("github-mine", comment.mine);
+        const author = document.createElement("p");
+        author.append(
+          link(
+            `${comment.author} - ${new Date(comment.date).toLocaleString()}`,
+            comment.url,
+          ),
+        );
+        const body = document.createElement("div");
+        body.className = "github-comment-body";
+        body.textContent = comment.body;
+        block.append(author, body);
+        card.append(block);
+      }
+      githubItems.append(card);
+    }
+    if (entry?.status === "ready" && !entry.page?.items.length) {
+      githubItems.textContent =
+        githubSection === "comments"
+          ? "No matching comments in this page."
+          : "No entries found.";
+    }
+  }
+
+  githubTabs.addEventListener("click", (event) => {
+    const button =
+      event.target instanceof Element ? event.target.closest("button") : null;
+    if (!(button instanceof HTMLButtonElement)) return;
+    const section = button.dataset.section;
+    if (
+      section === "issues" ||
+      section === "reviews" ||
+      section === "comments" ||
+      section === "commits"
+    ) {
+      githubSection = section;
+      renderGitHub();
+    }
+  });
+  githubRefresh.addEventListener("click", () => requestGitHub());
+  githubMore.addEventListener("click", () => requestGitHub(true));
 
   function closeRepositoryMenu(restoreFocus = false): void {
     const id = menuRepositoryId;
@@ -760,6 +934,8 @@ declare function acquireVsCodeApi(): {
   };
   messages.addEventListener("click", openLink);
   messages.addEventListener("auxclick", openLink);
+  githubItems.addEventListener("click", openLink);
+  githubItems.addEventListener("auxclick", openLink);
   question.addEventListener("input", () => {
     updateControls();
     if (state?.activeId) {
@@ -789,10 +965,37 @@ declare function acquireVsCodeApi(): {
       event: MessageEvent<
         | { type: "state"; state: State }
         | { type: "error"; message: string; id?: string }
+        | GitHubUpdate
       >,
     ) => {
       if (event.data.type === "state") {
         render(event.data.state);
+      } else if (event.data.type === "github") {
+        const update = event.data;
+        const key = JSON.stringify([update.id, update.section]);
+        const previous = githubPages.get(key);
+        const page =
+          update.page && update.append && previous?.page
+            ? {
+                ...update.page,
+                items: [
+                  ...new Map(
+                    [...previous.page.items, ...update.page.items].map(
+                      (item) => [item.id, item],
+                    ),
+                  ).values(),
+                ],
+              }
+            : (update.page ?? (update.append ? previous?.page : undefined));
+        if (page) {
+          page.items.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+        }
+        githubPages.set(key, {
+          status: update.status,
+          page,
+          error: update.error,
+        });
+        renderGitHub();
       } else if (event.data.type === "error") {
         if (pending && (!event.data.id || event.data.id === pending.id)) {
           drafts.set(pending.id, pending.text);

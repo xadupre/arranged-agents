@@ -45,6 +45,22 @@ saves periodically and flushes on tab disposal/deactivation. Snapshots contain
 transcripts, drafts, active repository and SDK session IDs, not browser-rendered
 HTML. Only discovered repositories can resume; loading history never spawns a CLI.
 
+``src/github.ts`` reads activity using ``gh`` from the selected repository's cwd
+and reads local commits using ``git``. GraphQL pages fetch recent discussions,
+then exhaust comment/review connections to compute accurate viewer flags;
+four discussions are processed concurrently. Comments merges commenter and
+reviewer searches, including closed discussions, and filters external comments
+against the viewer's latest response. Commands have bounded output, cancellation
+and deadlines, run without a shell or interactive authentication, and abort sibling
+work on failure.
+
+``src/github-panel.ts`` isolates asynchronous sidebar requests from Copilot,
+cancels superseded/removed work and drains requests on closure. Responses carry
+repository and section IDs; the browser caches them independently, rejects stale
+display routing and does not rebuild the sidebar for every chat-stream delta.
+The host validates repository IDs and opens HTTP/HTTPS links through VS Code.
+GitHub feed data is not persisted in conversation snapshots.
+
 Repository context-menu actions serialize lifecycle changes per repository,
 settle interrupted operations and preserve closed session IDs. New sessions
 archive the prior transcript, draft and SDK ID in the same versioned snapshot;
@@ -93,6 +109,8 @@ Validation entry points
   partial deletion failure/retry and shutdown during management.
 * ``test/storage.test.ts`` checks private atomic saves, root isolation,
   corrupt snapshots and write-error recovery using the real filesystem.
+* ``test/github.test.ts`` checks pagination, viewer flags, review/inline comment
+  handling, cancellation, failures and real local Git commit/link extraction.
 * ``test/webview.test.ts`` runs the compiled UI in a real DOM implementation,
   checking panel resizing, activity, Enter/Shift+Enter, links, category filters,
   equations, saved drafts and repository-specific errors.

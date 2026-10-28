@@ -4,7 +4,10 @@ Features and safeguards
 Current features
 ----------------
 
-* Open a three-panel editor tab: empty left panel, chat center and repositories right.
+* Open a three-panel editor tab: repository activity left, chat center and repositories right.
+* Browse issues, PRs, your comments and later responses, and recent local commits.
+* Highlight your issues/PRs and flag participation and responses after your latest reply.
+* Open issues, PRs, comments and GitHub-backed commits in the external browser.
 * Discover immediate child directories containing ``.git``, including worktrees.
 * Start each repository's session lazily when clicked.
 * Group active repository sessions in the first box, above other repositories.
@@ -126,6 +129,24 @@ A crash can lose changes since the latest periodic save; normal closure flushes
 pending writes. Multiple windows sharing a parent use the same snapshot, with
 the last save taking precedence. Existing windows running an older extension
 version cannot migrate their in-memory transcripts automatically.
+
+The activity sidebar is read-only and uses the selected repository's GitHub CLI
+authentication, independently of Copilot. Issues/PRs show open discussions in
+pages of 20; Comments combines pages of discussions you commented on or reviewed,
+including closed ones. The full comment/review histories of each returned
+discussion are paginated to compute participation and later responses accurately.
+Submitted reviews and inline review comments count as participation; pending
+reviews do not. Editing an older comment is not a new response. These flags compare
+timestamps, not whether you have read a response. Use Refresh to fetch new activity;
+there is no background polling. GitHub search indexing can delay the Comments feed,
+and its normal result limit applies.
+
+Commits shows the latest 30 commits of the current local branch, including
+unpublished commits. Links use the GitHub origin (or first fetch remote);
+unpublished hashes may not exist on GitHub until pushed. Without a GitHub remote,
+local commits remain visible with an explicit notice and no link. Missing CLI,
+authentication, permissions, rate-limit and API errors are displayed in the sidebar,
+not replaced with an empty result.
 
 Automated tests cover rendering, prompts and real SDK subprocess lifecycle
 using an explicit local CLI fixture. A real authenticated CLI model request and

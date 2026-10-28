@@ -7,6 +7,7 @@ Requirements
 * VS Code 1.105 or newer.
 * Node.js 22.13 or newer and npm for development.
 * An installed GitHub Copilot CLI, authenticated with ``copilot login``.
+* Git and an authenticated GitHub CLI (``gh auth login``) for repository activity.
 * A GitHub account with Copilot access. Model requests use your allowance.
 
 The integration has been verified with Copilot CLI 1.0.105. The SDK was matched
@@ -40,7 +41,7 @@ Choose a repository and chat
 
 Trust the workspace. The right panel lists only immediate subdirectories with
 a ``.git`` directory or file, including Git worktrees. It does not scan recursively
-or follow directory symlinks. The left panel is intentionally empty.
+or follow directory symlinks. The left panel shows the selected repository's activity.
 
 Click a repository to start its Copilot session. When **Session open - ready** appears,
 enter a message in the central panel and press **Enter** or click **Send**, for example:
@@ -128,6 +129,34 @@ Both require inline confirmation and permanently delete the corresponding
 Copilot histories through the SDK, not just the visible transcript. Other
 repositories, unrelated CLI sessions and Git files are untouched. A deletion
 failure is displayed; remaining histories are kept so you can retry.
+
+Browse repository activity
+--------------------------
+
+The left panel has four buttons: **Issues**, **Reviews** (pull requests),
+**Commits** and **Comments**. It follows the repository selected on the right.
+GitHub reads do not send prompts to Copilot or consume model requests.
+
+Issues and PRs you created have a tinted background and a **Yours** marker.
+**Replied** means you commented or submitted a review. **After you** means someone
+posted after your latest response in that discussion. The Comments view shows
+your own comments/reviews and others' comments after your latest response,
+including closed issues and PRs. Inline review replies are included; draft reviews
+are not. These are timestamp-based activity flags, not read/unread tracking.
+
+Click any issue/PR title or comment author/timestamp to open its GitHub permalink.
+Commits shows the latest 30 commits on the current local branch; click a commit to
+open it on GitHub when a GitHub remote is available. Unpushed commits may not exist
+there yet.
+
+Use the sidebar's **Refresh** to fetch new activity and **Load more** to paginate
+issues, PRs or commented/reviewed discussions. Switching views uses cached results;
+there is no automatic background polling. Missing authentication or API failures
+appear directly in the sidebar, with Refresh available to retry.
+
+All sidebar lists are newest-first, including after Load more. Issues and PRs use
+their last update time; comment groups use their latest displayed response, with
+individual comments also newest-first. Commits use their displayed author date.
 
 Configuration and remote workspaces
 -----------------------------------

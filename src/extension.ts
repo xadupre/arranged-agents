@@ -4,6 +4,7 @@ import { CopilotConversation } from "./conversation";
 import { renderApplication, renderMarkdown, renderText } from "./render";
 import { ApplicationStorage } from "./storage";
 import { describePermission } from "./presentation";
+import { GitHubPanel } from "./github-panel";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -58,6 +59,9 @@ export function activate(context: vscode.ExtensionContext): void {
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
     let stopping = false;
     let stopped: Promise<void> | undefined;
+    const github = new GitHubPanel((update) => {
+      if (panel) void panel.webview.postMessage(update);
+    }, report);
     const saveFailure = (error: unknown): void => {
       void vscode.window.showErrorMessage(
         `Arranged Agents could not save its history: ${report(error)}`,
@@ -115,7 +119,7 @@ export function activate(context: vscode.ExtensionContext): void {
         stopping = true;
         clearTimeout(saveTimer);
         try {
-          await application.dispose();
+          await Promise.all([application.dispose(), github.dispose()]);
         } finally {
           await storage.save(application.getSnapshot());
         }
@@ -179,7 +183,23 @@ export function activate(context: vscode.ExtensionContext): void {
               break;
             case "refresh":
               await application.refresh();
+              github.retain(
+                new Set(
+                  application
+                    .getState()
+                    .repositories.map((repository) => repository.id),
+                ),
+              );
               break;
+            case "github": {
+              const repository = application
+                .getState()
+                .repositories.find((entry) => entry.id === message.id);
+              if (!repository)
+                throw new Error("Unknown repository for GitHub activity.");
+              await github.load(repository, message.section, message.cursor);
+              break;
+            }
             case "select":
               await application.select(message.id);
               break;
