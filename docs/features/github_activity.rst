@@ -13,6 +13,12 @@ marker. **Replied** marks discussions in which you commented or submitted a
 review. **After you** indicates that another participant responded after your
 latest contribution.
 
+.. figure:: ../images/github-activity.png
+   :alt: Issues view with Yours, Replied and After you badges and tabs for the other activity views.
+   :width: 330px
+
+   Example issues and participation indicators using demo data.
+
 Comments and mentions
 ---------------------
 

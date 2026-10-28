@@ -22,6 +22,11 @@ Expand **Sources** to inspect the requests, answers, commands, results and
 technical events behind a row. Failed and abandoned attempts remain part of the
 analysis.
 
+.. figure:: ../images/postmortem.png
+   :alt: PostMortem report with a validation stage, source record references and an Export JSON button.
+
+   Illustrative report linked to the displayed demo conversation.
+
 The report is a model-generated interpretation, not an independent Git or test
 audit. Artifacts and validation can only be reported when the conversation
 contains supporting evidence. Analysis uses separate tool-free model requests,

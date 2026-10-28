@@ -12,6 +12,11 @@ Responses render Markdown headings, lists, tables and fenced code. Inline
 ``$x^2$`` and display ``$$E=mc^2$$`` equations use native MathML without remote
 fonts or scripts.
 
+.. figure:: ../images/conversations.png
+   :alt: Copilot conversation showing a Markdown table, TypeScript code, an equation, transcript filters and the token counter.
+
+   Rendered conversation with illustrative messages and a completed tool call.
+
 Paste up to five PNG, JPEG, GIF or WebP images into the message box, each no
 larger than 5 MiB. Images may be sent without text. Attachment drafts follow their
 repository while switching tabs, but unsent images are not restored after the
