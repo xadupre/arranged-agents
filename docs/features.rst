@@ -27,6 +27,8 @@ Current features
 * Toggle information categories above the chat without discarding history or affecting tools.
 * Save histories and drafts locally, stop on close and resume saved sessions lazily.
 * Right-click a repository to close, start fresh or delete its latest/all sessions.
+* Generate an evidence-linked PostMortem table for the full selected conversation.
+* Export its coherent-stage analysis and complete source transcript as JSON.
 
 Messages are limited to 20,000 characters. Parallel requests receive up to 80,000
 characters of visible conversation context. The UI does not automatically include

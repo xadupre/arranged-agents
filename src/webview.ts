@@ -28,6 +28,9 @@ declare function acquireVsCodeApi(): {
   const question = element("question", HTMLTextAreaElement);
   const send = element("send", HTMLButtonElement);
   const parallel = element("parallel", HTMLButtonElement);
+  const postMortem = element("postmortem", HTMLButtonElement);
+  const exportPostMortem = element("export-postmortem", HTMLButtonElement);
+  let postMortemRenderedKey: string | undefined;
   const cancel = element("cancel", HTMLButtonElement);
   const restart = element("restart", HTMLButtonElement);
   const error = element("error", HTMLElement);
@@ -207,9 +210,17 @@ declare function acquireVsCodeApi(): {
     const submitting = pending !== undefined && pending.id === repository?.id;
     question.disabled = !ready || submitting;
     send.disabled = !ready || submitting || !question.value.trim();
-    cancel.disabled = !["starting", "busy"].includes(
-      repository?.status ?? "idle",
-    );
+    postMortem.disabled =
+      !repository ||
+      submitting ||
+      !state?.messages.length ||
+      ["starting", "busy", "stopping"].includes(repository.status);
+    postMortem.textContent = state?.postMortemBusy
+      ? "Generating PostMortem..."
+      : "PostMortem";
+    cancel.disabled =
+      !state?.postMortemBusy &&
+      !["starting", "busy"].includes(repository?.status ?? "idle");
     restart.hidden =
       repository?.status !== "error" || !repository.hasSavedSession;
     const running =
@@ -268,9 +279,11 @@ declare function acquireVsCodeApi(): {
     element("active-repository", HTMLElement).textContent =
       active?.name ?? "Select a repository on the right";
     element("session-status", HTMLElement).textContent = active
-      ? statusLabels[active.status] +
-        (active.parallelCount ? ` (${active.parallelCount} parallel)` : "") +
-        (active.queuedCount ? ` (${active.queuedCount} queued)` : "")
+      ? state.postMortemBusy
+        ? "Generating PostMortem..."
+        : statusLabels[active.status] +
+          (active.parallelCount ? ` (${active.parallelCount} parallel)` : "") +
+          (active.queuedCount ? ` (${active.queuedCount} queued)` : "")
       : "No Copilot session has started.";
     question.placeholder = active
       ? `Ask Copilot about ${active.name}...`
@@ -349,7 +362,125 @@ declare function acquireVsCodeApi(): {
     updateControls();
     updateRepositoryMenu();
     renderGitHub();
+    renderPostMortem();
   }
+
+  function renderPostMortem(): void {
+    const report = state?.postMortem;
+    const stale = Boolean(
+      report && (state?.messages.length ?? 0) > report.sourceCount,
+    );
+    const key = JSON.stringify([
+      state?.activeId,
+      report?.sourceHash,
+      report?.generatedAt,
+      state?.postMortemBusy,
+      state?.postMortemError,
+      stale,
+    ]);
+    if (postMortemRenderedKey === key) return;
+    postMortemRenderedKey = key;
+    const section = element("postmortem-report", HTMLElement);
+    section.hidden =
+      !report && !state?.postMortemBusy && !state?.postMortemError;
+    exportPostMortem.disabled = !report;
+    const status = element("postmortem-status", HTMLElement);
+    status.textContent = state?.postMortemBusy
+      ? "Analysing all recorded exchanges; no tools or repository changes."
+      : report
+        ? `${report.sourceCount} source records - ${new Date(report.generatedAt).toLocaleString()}. Model-generated analysis; consult its sources.${stale ? " New exchanges are not included; generate again when work finishes." : ""}`
+        : "";
+    const error = element("postmortem-error", HTMLElement);
+    error.textContent = state?.postMortemError ?? "";
+    error.hidden = !error.textContent;
+    const container = element("postmortem-table", HTMLElement);
+    container.replaceChildren();
+    if (!report) return;
+    const table = document.createElement("table");
+    const caption = document.createElement("caption");
+    caption.textContent = `Conversation analysis - ${report.repository.name}`;
+    table.append(caption);
+    const head = document.createElement("thead");
+    const headings = document.createElement("tr");
+    for (const label of [
+      "Stage",
+      "Objective",
+      "Production / decisions",
+      "Files / PR / commit",
+      "Validation",
+      "Errors / corrections",
+      "Sources",
+    ]) {
+      const cell = document.createElement("th");
+      cell.scope = "col";
+      cell.textContent = label;
+      headings.append(cell);
+    }
+    head.append(headings);
+    table.append(head);
+    const body = document.createElement("tbody");
+    const sourceMessages = state?.messages ?? [];
+    for (const row of report.rows) {
+      const tr = document.createElement("tr");
+      for (const value of [
+        row.phase,
+        row.objective,
+        row.production,
+        row.filesAndCommits,
+        row.validation,
+        row.errors,
+      ]) {
+        const cell = document.createElement("td");
+        cell.textContent = value;
+        tr.append(cell);
+      }
+      const cell = document.createElement("td");
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = `${row.firstMessage}-${row.lastMessage}`;
+      details.append(summary);
+      let rendered = false;
+      details.addEventListener("toggle", () => {
+        if (!details.open || rendered) return;
+        rendered = true;
+        for (
+          let index = row.firstMessage - 1;
+          index < row.lastMessage;
+          index++
+        ) {
+          const message = sourceMessages[index];
+          if (!message) continue;
+          const heading = document.createElement("h4");
+          heading.textContent = `#${index + 1} ${message.role}${message.title ? ` - ${message.title}` : ""}`;
+          const content = document.createElement("pre");
+          content.textContent = message.content;
+          details.append(heading, content);
+          if (message.details) {
+            const metadata = document.createElement("pre");
+            metadata.textContent = message.details;
+            details.append(metadata);
+          }
+        }
+      });
+      cell.append(details);
+      tr.append(cell);
+      body.append(tr);
+    }
+    table.append(body);
+    container.append(table);
+  }
+
+  postMortem.addEventListener("click", () => {
+    if (state?.activeId && !postMortem.disabled) {
+      postMortem.disabled = true;
+      vscode.postMessage({ type: "postmortem", id: state.activeId });
+    }
+  });
+  exportPostMortem.addEventListener("click", () => {
+    if (state?.activeId && !exportPostMortem.disabled) {
+      vscode.postMessage({ type: "export-postmortem", id: state.activeId });
+    }
+  });
 
   function githubKey(id: string): string {
     return JSON.stringify([id, githubSection]);

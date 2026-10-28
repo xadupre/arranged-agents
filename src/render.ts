@@ -88,6 +88,7 @@ export function renderApplication(resources: {
       <h1>Arranged Agents</h1>
       <h2 id="active-repository">Select a repository on the right</h2>
       <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
+      <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
       <fieldset id="information-filters">
         <legend>Show information</legend>
         <label><input type="checkbox" value="messages" checked> Messages</label>
@@ -98,6 +99,15 @@ export function renderApplication(resources: {
       </fieldset>
     </header>
     <div id="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
+    <section id="postmortem-report" aria-label="Conversation PostMortem" hidden>
+      <div class="postmortem-toolbar">
+        <h2>PostMortem</h2>
+        <button id="export-postmortem" type="button" disabled>Export JSON</button>
+      </div>
+      <p id="postmortem-status" role="status"></p>
+      <p id="postmortem-error" role="alert" hidden></p>
+      <div id="postmortem-table"></div>
+    </section>
     <div id="interactions">
       <section id="permissions" aria-label="Tool permissions" hidden></section>
       <section id="questions" aria-label="Questions from Copilot" hidden></section>

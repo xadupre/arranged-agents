@@ -91,7 +91,7 @@ function handle(request: Request): void {
       reply(request.id, { protocolVersion: 3 });
       break;
     case "session.create":
-      if (scenario.startsWith("persist")) {
+      if (scenario.startsWith("persist") || scenario === "postmortem") {
         writeFileSync(`history-${request.params?.sessionId}.json`, "[]");
       }
       if (scenario === "events") {
@@ -147,6 +147,33 @@ function handle(request: Request): void {
       break;
     }
     case "session.sendAndWait":
+      if (scenario === "postmortem") {
+        const entries: unknown[] = JSON.parse(
+          request.params?.prompt?.split("\n").at(-1) ?? "[]",
+        );
+        reply(request.id, {
+          response: {
+            type: "assistant.message",
+            data: {
+              content: JSON.stringify({
+                rows: [
+                  {
+                    first: 1,
+                    last: entries.length,
+                    phase: "Implementation and delivery",
+                    objective: "Complete the requested task",
+                    production: "Code, tests and a commit",
+                    filesAndCommits: "As recorded in the source conversation",
+                    validation: "Reported test results; consult sources",
+                    errors: "Recorded errors and corrections",
+                  },
+                ],
+              }),
+            },
+          },
+        });
+        break;
+      }
       if (scenario === "question") {
         pendingSend = request.id;
         transmit({

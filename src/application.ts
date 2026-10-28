@@ -5,6 +5,12 @@ import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
 import { describeTool } from "./presentation";
 import { isGitHubSection, type GitHubSection } from "./github";
+import {
+  parsePostMortem,
+  postMortemSources,
+  type PostMortem,
+  type PostMortemSource,
+} from "./postmortem";
 import type {
   SavedApplication,
   SavedConversation,
@@ -44,6 +50,9 @@ export interface ApplicationState {
   draft: string;
   permissions: PendingPermission[];
   questions: PendingQuestion[];
+  postMortem?: PostMortem;
+  postMortemBusy?: boolean;
+  postMortemError?: string;
 }
 export interface PendingPermission {
   id: string;
@@ -73,6 +82,9 @@ interface RepositorySession {
   generation: number;
   removed?: boolean;
   eventMessages: Map<string, ChatMessage>;
+  postMortem?: PostMortem;
+  postMortemError?: string;
+  postMortemOperation?: { controller: AbortController; promise: Promise<void> };
   parallel: Map<string, RepositorySession>;
   queue: {
     question: string;
@@ -86,7 +98,11 @@ interface RepositorySession {
 export type ApplicationMessage =
   | { type: "ready" | "refresh" }
   | { type: "github"; id: string; section: GitHubSection; cursor?: string }
-  | { type: "select" | "cancel" | "restart"; id: string }
+  | {
+      type:
+        "select" | "cancel" | "restart" | "postmortem" | "export-postmortem";
+      id: string;
+    }
   | {
       type:
         | "close-session"
@@ -159,6 +175,8 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     value.type === "select" ||
     value.type === "cancel" ||
     value.type === "restart" ||
+    value.type === "postmortem" ||
+    value.type === "export-postmortem" ||
     value.type === "close-session" ||
     value.type === "new-session" ||
     value.type === "delete-last-session" ||
@@ -247,6 +265,7 @@ export class AgentApplication {
       if (!ids.has(id)) {
         session.removed = true;
         session.controller?.abort();
+        session.postMortemOperation?.controller.abort();
         for (const child of session.parallel.values())
           child.controller?.abort();
         this.cancelQueue(session);
@@ -285,6 +304,7 @@ export class AgentApplication {
           eventMessages: new Map(),
           parallel: new Map(),
           queue: [],
+          postMortem: saved?.postMortem,
         });
       }
     }
@@ -301,12 +321,13 @@ export class AgentApplication {
       repositories: [...this.sessions.values()]
         .map((session) => ({
           ...session.repository,
-          status: session.managing
-            ? ("stopping" as const)
-            : session.parallel.size &&
-                ["ready", "error"].includes(session.status)
-              ? ("busy" as const)
-              : session.status,
+          status:
+            session.managing || session.postMortemOperation
+              ? ("stopping" as const)
+              : session.parallel.size &&
+                  ["ready", "error"].includes(session.status)
+                ? ("busy" as const)
+                : session.status,
           hasSavedSession: Boolean(session.sessionId),
           sessionCount:
             session.history.length +
@@ -328,6 +349,11 @@ export class AgentApplication {
         ...request,
         choices: request.choices ? [...request.choices] : undefined,
       })),
+      postMortem: active?.postMortem
+        ? structuredClone(active.postMortem)
+        : undefined,
+      postMortemBusy: Boolean(active?.postMortemOperation),
+      postMortemError: active?.postMortemError,
     };
   }
 
@@ -448,6 +474,89 @@ export class AgentApplication {
       activeId: this.activeId,
       sessions: [...sessions.values()],
     };
+  }
+
+  createPostMortem(
+    id: string,
+    generate: (
+      source: PostMortemSource,
+      signal: AbortSignal,
+    ) => Promise<PostMortem>,
+  ): Promise<void> {
+    this.assertOpen();
+    const session = this.getSession(id);
+    this.assertAvailable(session);
+    if (
+      id !== this.activeId ||
+      ["starting", "busy"].includes(session.status) ||
+      session.parallel.size ||
+      session.queue.length
+    ) {
+      throw new Error(
+        "Wait for this conversation's work to finish before generating its PostMortem.",
+      );
+    }
+    if (!session.messages.length)
+      throw new Error("There is no conversation to analyse.");
+    const source: PostMortemSource = {
+      repository: { ...session.repository },
+      sessionId: session.sessionId,
+      messages: session.messages.map((message) => ({ ...message })),
+    };
+    const controller = new AbortController();
+    session.postMortemError = undefined;
+    const promise = Promise.resolve()
+      .then(async () => {
+        controller.signal.throwIfAborted();
+        const report = parsePostMortem(
+          await generate(source, controller.signal),
+        );
+        controller.signal.throwIfAborted();
+        this.assertOpen();
+        if (
+          session.removed ||
+          report.repository.id !== id ||
+          report.sourceCount !== source.messages.length
+        ) {
+          throw new Error(
+            "The PostMortem belongs to a different conversation.",
+          );
+        }
+        postMortemSources(report, session.messages);
+        session.postMortem = report;
+      })
+      .catch((error: unknown) => {
+        if (!this.closed)
+          session.postMortemError =
+            error instanceof Error ? error.message : String(error);
+        throw error;
+      })
+      .finally(() => {
+        session.postMortemOperation = undefined;
+        this.onChange();
+      });
+    session.postMortemOperation = { controller, promise };
+    this.onChange();
+    return promise;
+  }
+
+  exportPostMortem(id: string): string {
+    this.assertOpen();
+    const session = this.getSession(id);
+    const report = session.postMortem;
+    if (!report) throw new Error("Generate a PostMortem before exporting it.");
+    return (
+      JSON.stringify(
+        {
+          ...report,
+          sources: postMortemSources(report, session.messages).map(
+            (message, index) => ({ index: index + 1, ...message }),
+          ),
+        },
+        null,
+        2,
+      ) + "\n"
+    );
   }
 
   setDraft(id: string, text: string): void {
@@ -812,6 +921,11 @@ export class AgentApplication {
   cancel(id: string): void {
     this.assertOpen();
     const session = this.getSession(id);
+    if (session.postMortemOperation) {
+      session.postMortemOperation.controller.abort();
+      this.onChange();
+      return;
+    }
     session.controller?.abort();
     for (const child of session.parallel.values()) child.controller?.abort();
     this.cancelQueue(session);
@@ -908,6 +1022,8 @@ export class AgentApplication {
       });
     }
     session.controller?.abort();
+    const postMortem = session.postMortemOperation;
+    postMortem?.controller.abort();
     this.cancelQueue(session);
     const children = [...session.parallel.values()];
     for (const child of children) child.controller?.abort();
@@ -917,6 +1033,7 @@ export class AgentApplication {
       ...(session.starting ? [session.starting] : []),
       ...(session.sending ? [session.sending] : []),
       ...children.flatMap((child) => (child.sending ? [child.sending] : [])),
+      ...(postMortem ? [postMortem.promise] : []),
     ]);
     session.sessionId = sessionId ?? conversation?.sessionId;
     session.conversation = undefined;
@@ -937,11 +1054,20 @@ export class AgentApplication {
     session.error = undefined;
     session.generation++;
     session.eventMessages.clear();
+    session.postMortem = saved?.postMortem
+      ? structuredClone(saved.postMortem)
+      : undefined;
+    session.postMortemError = undefined;
   }
 
   private assertAvailable(session: RepositorySession): void {
     if (session.removed) {
       throw new Error("The repository is no longer available.");
+    }
+    if (session.postMortemOperation) {
+      throw new Error(
+        "A PostMortem is already being generated for this repository.",
+      );
     }
     if (session.managing) {
       throw new Error(
@@ -961,6 +1087,9 @@ export class AgentApplication {
       sessionId: session.sessionId,
       draft: session.draft,
       messages: session.messages.map((message) => ({ ...message })),
+      ...(session.postMortem
+        ? { postMortem: structuredClone(session.postMortem) }
+        : {}),
     };
   }
 
@@ -980,6 +1109,7 @@ export class AgentApplication {
         });
       }
       session.controller?.abort();
+      session.postMortemOperation?.controller.abort();
       this.cancelQueue(session);
       for (const child of session.parallel.values()) child.controller?.abort();
     }
@@ -993,6 +1123,9 @@ export class AgentApplication {
         ...(session.starting ? [session.starting] : []),
         ...(session.sending ? [session.sending] : []),
         ...(session.managing ? [session.managing] : []),
+        ...(session.postMortemOperation
+          ? [session.postMortemOperation.promise]
+          : []),
         ...[...session.parallel.values()].flatMap((child) =>
           child.sending ? [child.sending] : [],
         ),

@@ -2,11 +2,13 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatMessage } from "./application";
+import { parsePostMortem, type PostMortem } from "./postmortem";
 
 export interface SavedConversation {
   sessionId?: string;
   draft: string;
   messages: ChatMessage[];
+  postMortem?: PostMortem;
 }
 
 export interface SavedRepositorySession extends SavedConversation {
@@ -51,6 +53,15 @@ function parseConversation(value: unknown): SavedConversation {
   ) {
     throw new Error("Invalid conversation in saved Arranged Agents history.");
   }
+  const postMortem =
+    value.postMortem === undefined
+      ? undefined
+      : parsePostMortem(value.postMortem);
+  if (postMortem && postMortem.sourceCount > value.messages.length) {
+    throw new Error(
+      "Saved PostMortem references missing conversation records.",
+    );
+  }
   return {
     sessionId: value.sessionId,
     draft: value.draft,
@@ -63,6 +74,7 @@ function parseConversation(value: unknown): SavedConversation {
       details: message.details,
       error: message.error,
     })),
+    ...(postMortem ? { postMortem } : {}),
   };
 }
 

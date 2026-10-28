@@ -45,6 +45,22 @@ saves periodically and flushes on tab disposal/deactivation. Snapshots contain
 transcripts, drafts, active repository and SDK session IDs, not browser-rendered
 HTML. Only discovered repositories can resume; loading history never spawns a CLI.
 
+``src/postmortem.ts`` analyses a stable snapshot of the full selected conversation.
+Messages, including technical details, are split into numbered fragments and packed
+into sequential batches of at most 48,000 serialized characters. Separate tool-free
+model requests use a JSON response schema; host validation requires an ordered,
+complete partition of every input fragment. Rows reference original message ranges
+and retain objectives, production, artifacts, validation and errors. The model's
+interpretation is not an independent verification of those artifacts.
+
+PostMortem operations have their own cancellation controller, block mutation of the
+selected snapshot and leave the main SDK session intact. Reports are optional fields
+on the existing version-1 saved conversation, including archives. Raw sources are
+not duplicated in storage: a canonical SHA-256 fingerprint and source count identify
+the analysed prefix. JSON export validates this fingerprint and includes the full
+source records. UI source blocks are expanded lazily; unchanged reports are not
+rebuilt on conversation-stream updates. Analysis creates no background polling.
+
 ``src/github.ts`` reads activity using ``gh`` from the selected repository's cwd
 and reads local commits using ``git``. GraphQL pages fetch recent discussions,
 then exhaust comment/review connections to compute accurate viewer flags;

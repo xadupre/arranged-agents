@@ -93,6 +93,14 @@ not shown as individual commands. Raw metadata and timestamps are hidden until
 **Session / events (JSON)** is checked; expand **Event details** to inspect metadata.
 HTTP/HTTPS links, including plain URLs in tool output, open in your browser.
 
+After a task finishes, click **PostMortem** above the conversation. Copilot groups
+the whole selected session's recorded exchanges into a table of coherent stages:
+objectives, production/decisions, files/PR/commit, validations and errors/corrections.
+Expand each row's **Sources** to inspect its evidence. **Export JSON** saves both
+the table and the complete analysed transcript. The report stays with the saved
+conversation; later exchanges are excluded until you generate it again.
+Analysis uses separate tool-free model requests and your normal Copilot allowance.
+
 Right-click a repository (or press Shift+F10) to manage its sessions:
 
 - **Close session** stops Copilot but keeps its history and resumable context.

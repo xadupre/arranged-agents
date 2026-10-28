@@ -1,10 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { askCopilot, type CopilotOptions } from "../src/copilot";
 import { waitForRequest } from "./helpers";
+import {
+  generatePostMortem,
+  postMortemResponseSchema,
+} from "../src/postmortem";
 
 const fixture = join(__dirname, "fixtures", "copilot.js");
 
@@ -24,6 +28,75 @@ async function assertStopped(options: CopilotOptions): Promise<void> {
   );
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
+
+test("PostMortem analysis uses a real isolated SDK client without tools or discovery and deletes its completed session", async (t) => {
+  const options = await setup(t, "postmortem");
+  const report = await generatePostMortem(
+    {
+      repository: {
+        id: options.workingDirectory,
+        name: "Example",
+        path: options.workingDirectory,
+      },
+      messages: [
+        { role: "user", content: "Build a feature" },
+        { role: "assistant", content: "Committed abcdef0123456789" },
+      ],
+    },
+    (prompt, signal) =>
+      askCopilot(prompt, {
+        ...options,
+        signal,
+        analysisOnly: true,
+        responseSchema: postMortemResponseSchema,
+      }),
+    new AbortController().signal,
+  );
+  assert.equal(report.sourceCount, 2);
+  assert.equal(report.rows.length, 1);
+  const requests: { method: string; params: Record<string, unknown> }[] = (
+    await readFile(join(options.workingDirectory, "requests.jsonl"), "utf8")
+  )
+    .trim()
+    .split("\n")
+    .map((line: string) => JSON.parse(line));
+  const create = requests.find(
+    (request) => request.method === "session.create",
+  );
+  assert.ok(create);
+  assert.deepEqual(create.params.availableTools, []);
+  for (const flag of [
+    "enableConfigDiscovery",
+    "enableSkills",
+    "enableOnDemandInstructionDiscovery",
+    "enableHostGitOperations",
+    "interactiveUser",
+  ])
+    assert.equal(create.params[flag], false);
+  assert.deepEqual(
+    requests.find((request) => request.method === "session.sendAndWait")?.params
+      .responseFormat,
+    {
+      type: "json_schema",
+      jsonSchema: {
+        name: "response",
+        strict: true,
+        schema: postMortemResponseSchema,
+      },
+    },
+  );
+  assert.equal(
+    requests.find((request) => request.method === "session.delete")?.params
+      .sessionId,
+    create.params.sessionId,
+  );
+  assert.ok(
+    (await readdir(options.workingDirectory)).every(
+      (name) => !name.startsWith("history-"),
+    ),
+  );
+  await assertStopped(options);
+});
 
 test("resolves the CLI through PATH and preserves repository tools, Git context and native instructions", async (t) => {
   const options = await setup(t);

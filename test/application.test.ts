@@ -13,6 +13,30 @@ import { CopilotConversation } from "../src/conversation";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { waitForRequest } from "./helpers";
 import { describePermission } from "../src/presentation";
+import { generatePostMortem, type PostMortemSource } from "../src/postmortem";
+
+const analysePostMortem = (source: PostMortemSource, signal: AbortSignal) =>
+  generatePostMortem(
+    source,
+    async (prompt) => {
+      const entries: unknown[] = JSON.parse(prompt.split("\n").at(-1)!);
+      return JSON.stringify({
+        rows: [
+          {
+            first: 1,
+            last: entries.length,
+            phase: "Delivery",
+            objective: "Complete the task",
+            production: "Agent answers, commands and changes",
+            filesAndCommits: "As recorded",
+            validation: "Recorded validation",
+            errors: "Recorded errors and corrections",
+          },
+        ],
+      });
+    },
+    signal,
+  );
 
 async function setup(
   t: TestContext,
@@ -115,6 +139,144 @@ async function requests(
 async function pid(directory: string): Promise<number> {
   return Number(await readFile(join(directory, "pid"), "utf8"));
 }
+
+test("PostMortems survive saving and session archives, and export the exact analysed conversation rather than later work", async (t) => {
+  const { application, root, createApplication } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  await application.send(alpha, "Produce a commit for this PR");
+  const sources = application.getState().messages;
+  await application.createPostMortem(alpha, analysePostMortem);
+  const report = application.getState().postMortem;
+  assert.ok(report);
+  assert.deepEqual(application.getState().messages, sources);
+  assert.equal(report.sourceCount, sources.length);
+  application.setDraft(alpha, "Keep this draft");
+  await application.send(alpha, "Later work must not enter the older export");
+  const exported = JSON.parse(application.exportPostMortem(alpha));
+  assert.deepEqual(
+    exported.sources,
+    sources.map((message, index) => ({ index: index + 1, ...message })),
+  );
+  assert.deepEqual(exported.rows, report.rows);
+  await application.dispose();
+  const storage = new ApplicationStorage(join(root, "storage"), root);
+  await storage.save(application.getSnapshot());
+  const restored = createApplication(await storage.load());
+  await restored.refresh();
+  assert.equal(
+    restored.exportPostMortem(alpha),
+    JSON.stringify(exported, null, 2) + "\n",
+  );
+  assert.equal(
+    (await requests(alpha)).filter(
+      (request) => request.method === "session.resume",
+    ).length,
+    0,
+  );
+  await restored.createPostMortem(alpha, analysePostMortem);
+  assert.equal(restored.getState().postMortem?.sourceCount, sources.length + 2);
+  await restored.newSession(alpha);
+  assert.equal(restored.getState().postMortem, undefined);
+  await restored.deleteSessions(alpha, false);
+  assert.equal(restored.getState().postMortem?.sourceCount, sources.length + 2);
+});
+
+test("PostMortem failures and cancellation preserve the main conversation, draft and previous report", async (t) => {
+  const { application, root } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const child = await pid(alpha);
+  await application.send(alpha, "Finish the task");
+  await application.createPostMortem(alpha, analysePostMortem);
+  application.setDraft(alpha, "Unsent draft");
+  const before = application.exportPostMortem(alpha);
+  await assert.rejects(
+    application.createPostMortem(alpha, async () => {
+      throw new Error("Analysis failed");
+    }),
+    /Analysis failed/,
+  );
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.equal(application.getState().postMortemError, "Analysis failed");
+  let entered!: () => void;
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const pending = application.createPostMortem(
+    alpha,
+    (_source, signal) =>
+      new Promise((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(signal.reason), {
+          once: true,
+        });
+        entered();
+      }),
+  );
+  const cancelled = assert.rejects(pending, { name: "AbortError" });
+  await started;
+  assert.equal(application.getState().postMortemBusy, true);
+  await assert.rejects(
+    application.send(alpha, "Do not mutate a snapshot in progress"),
+    /PostMortem/,
+  );
+  assert.throws(() => application.newSession(alpha), /PostMortem/);
+  application.cancel(alpha);
+  await cancelled;
+  assert.equal(application.exportPostMortem(alpha), before);
+  assert.equal(application.getState().draft, "Unsent draft");
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.doesNotThrow(() => process.kill(child, 0));
+});
+
+test("PostMortem waits for completed work and shutdown or removal cannot attach a late report", async (t) => {
+  const { application, root, waitForPermission } = await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const sending = application.send(alpha, "Finish this task first");
+  const permission = await waitForPermission(alpha);
+  assert.throws(
+    () => application.createPostMortem(alpha, analysePostMortem),
+    /work to finish/,
+  );
+  application.respondToPermission(permission.id, true);
+  await sending;
+  for (const action of ["remove", "dispose"]) {
+    await t.test(action, async (t) => {
+      const { application, root } = await setup(t, "persist");
+      const alpha = join(root, "alpha");
+      await application.select(alpha);
+      await application.send(alpha, "Completed task");
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const pending = application.createPostMortem(
+        alpha,
+        (_source, signal) =>
+          new Promise((_resolve, reject) => {
+            signal.addEventListener("abort", () => reject(signal.reason), {
+              once: true,
+            });
+            entered();
+          }),
+      );
+      const cancelled = assert.rejects(pending, { name: "AbortError" });
+      await started;
+      if (action === "remove") {
+        await rm(join(alpha, ".git"), { recursive: true });
+        await application.refresh();
+      } else await application.dispose();
+      await cancelled;
+      assert.equal(
+        application
+          .getSnapshot()
+          .sessions.find((session) => session.id === alpha)?.postMortem,
+        undefined,
+      );
+    });
+  }
+});
 
 test("parallel questions run immediately with visible context and isolated approvals, while OFF messages drain FIFO", async (t) => {
   const { application, root, waitForPermission } = await setup(t, "permission");

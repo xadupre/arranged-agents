@@ -5,6 +5,9 @@ import { renderApplication, renderMarkdown, renderText } from "./render";
 import { ApplicationStorage } from "./storage";
 import { describePermission } from "./presentation";
 import { GitHubPanel } from "./github-panel";
+import { askCopilot } from "./copilot";
+import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
+import { join } from "node:path";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -210,6 +213,41 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.parallel,
               );
               break;
+            case "postmortem":
+              await application.createPostMortem(message.id, (source, signal) =>
+                generatePostMortem(
+                  source,
+                  (prompt, signal) =>
+                    askCopilot(prompt, {
+                      cliPath: configuration.get<string>("cliPath", "copilot"),
+                      model: configuration.get<string>("model", "").trim(),
+                      workingDirectory: source.repository.path,
+                      signal,
+                      analysisOnly: true,
+                      responseSchema: postMortemResponseSchema,
+                    }),
+                  signal,
+                ),
+              );
+              await storage.save(application.getSnapshot());
+              break;
+            case "export-postmortem": {
+              const json = application.exportPostMortem(message.id);
+              const destination = await vscode.window.showSaveDialog({
+                title: "Export PostMortem",
+                saveLabel: "Export JSON",
+                filters: { JSON: ["json"] },
+                defaultUri: vscode.Uri.file(
+                  join(root.fsPath, "postmortem.json"),
+                ),
+              });
+              if (destination)
+                await vscode.workspace.fs.writeFile(
+                  destination,
+                  Buffer.from(json, "utf8"),
+                );
+              break;
+            }
             case "cancel":
               application.cancel(message.id);
               break;
