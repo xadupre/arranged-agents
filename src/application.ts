@@ -3,13 +3,19 @@ import type { Conversation } from "./conversation";
 import { buildPrompt, MAX_PROMPT_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
-import type { SavedApplication, SavedRepositorySession } from "./storage";
+import { describeTool } from "./presentation";
+import type {
+  SavedApplication,
+  SavedConversation,
+  SavedRepositorySession,
+} from "./storage";
+import type { UserInputRequest, UserInputResponse } from "./copilot";
 import type { SessionEvent } from "@github/copilot-sdk" with {
   "resolution-mode": "import",
 };
 
 export type SessionStatus =
-  "idle" | "saved" | "starting" | "ready" | "busy" | "error";
+  "idle" | "saved" | "starting" | "ready" | "busy" | "error" | "stopping";
 export type InformationType =
   "messages" | "reasoning" | "tools" | "output" | "system";
 export interface ChatMessage {
@@ -19,24 +25,34 @@ export interface ChatMessage {
   timestamp?: string;
   agentId?: string;
   details?: string;
+  error?: boolean;
 }
 export interface ApplicationState {
   root: string;
   repositories: (Repository & {
     status: SessionStatus;
     hasSavedSession?: boolean;
+    sessionCount?: number;
+    generation?: number;
   })[];
   activeId?: string;
   messages: ChatMessage[];
   error?: string;
   draft: string;
   permissions: PendingPermission[];
+  questions: PendingQuestion[];
 }
 export interface PendingPermission {
   id: string;
   repositoryId: string;
   kind: string;
+  summary: string;
+  content: string;
   details: string;
+}
+export interface PendingQuestion extends UserInputRequest {
+  id: string;
+  repositoryId: string;
 }
 interface RepositorySession {
   repository: Repository;
@@ -49,14 +65,27 @@ interface RepositorySession {
   sessionId?: string;
   draft: string;
   sending?: Promise<void>;
+  managing?: Promise<void>;
+  history: SavedConversation[];
+  generation: number;
+  removed?: boolean;
   eventMessages: Map<string, ChatMessage>;
 }
 
 export type ApplicationMessage =
   | { type: "ready" | "refresh" }
   | { type: "select" | "cancel" | "restart"; id: string }
+  | {
+      type:
+        | "close-session"
+        | "new-session"
+        | "delete-last-session"
+        | "delete-all-sessions";
+      id: string;
+    }
   | { type: "draft"; id: string; text: string }
   | { type: "permission"; id: string; approve: boolean }
+  | { type: "answer"; id: string; answer: string }
   | { type: "openExternal"; url: string }
   | { type: "send"; id: string; question: string };
 
@@ -81,6 +110,15 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
     throw new Error("The application message must identify a repository.");
   }
   if (
+    value.type === "answer" &&
+    "answer" in value &&
+    typeof value.answer === "string" &&
+    value.answer.trim() &&
+    value.answer.length <= MAX_PROMPT_LENGTH
+  ) {
+    return { type: "answer", id: value.id, answer: value.answer };
+  }
+  if (
     value.type === "permission" &&
     "approve" in value &&
     typeof value.approve === "boolean"
@@ -90,7 +128,11 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (
     value.type === "select" ||
     value.type === "cancel" ||
-    value.type === "restart"
+    value.type === "restart" ||
+    value.type === "close-session" ||
+    value.type === "new-session" ||
+    value.type === "delete-last-session" ||
+    value.type === "delete-all-sessions"
   ) {
     return { type: value.type, id: value.id };
   }
@@ -122,6 +164,14 @@ export class AgentApplication {
     string,
     { request: PendingPermission; resolve: (approve: boolean) => void }
   >();
+  private readonly questions = new Map<
+    string,
+    {
+      request: PendingQuestion;
+      resolve: (response: UserInputResponse) => void;
+      reject: (error: Error) => void;
+    }
+  >();
 
   constructor(
     readonly root: string,
@@ -149,9 +199,14 @@ export class AgentApplication {
     const ids = new Set(repositories.map((repository) => repository.id));
     for (const [id, session] of this.sessions) {
       if (!ids.has(id)) {
+        session.removed = true;
         session.controller?.abort();
-        this.rejectPermissions(id);
+        this.clearPendingRequests(id);
         await session.conversation?.dispose();
+        if (session.managing) {
+          await Promise.allSettled([session.managing]);
+        }
+        await this.stopSession(session);
         this.saved.set(id, this.saveSession(session));
         this.sessions.delete(id);
         if (this.activeId === id) {
@@ -168,6 +223,9 @@ export class AgentApplication {
           sessionId: saved?.sessionId,
           draft: saved?.draft ?? "",
           messages: saved?.messages.map((message) => ({ ...message })) ?? [],
+          history:
+            saved?.history?.map((entry) => this.copyConversation(entry)) ?? [],
+          generation: 0,
           eventMessages: new Map(),
         });
       }
@@ -183,10 +241,13 @@ export class AgentApplication {
     return {
       root: this.root,
       repositories: [...this.sessions.values()]
-        .map(({ repository, status, sessionId }) => ({
-          ...repository,
-          status,
-          hasSavedSession: Boolean(sessionId),
+        .map((session) => ({
+          ...session.repository,
+          status: session.managing ? ("stopping" as const) : session.status,
+          hasSavedSession: Boolean(session.sessionId),
+          sessionCount:
+            session.history.length + (this.hasConversation(session) ? 1 : 0),
+          generation: session.generation,
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),
       activeId: this.activeId,
@@ -196,13 +257,16 @@ export class AgentApplication {
       permissions: [...this.permissions.values()].map(({ request }) => ({
         ...request,
       })),
+      questions: [...this.questions.values()].map(({ request }) => ({
+        ...request,
+        choices: request.choices ? [...request.choices] : undefined,
+      })),
     };
   }
 
   requestPermission(
     repositoryId: string,
-    kind: string,
-    details: string,
+    permission: Omit<PendingPermission, "id" | "repositoryId">,
   ): Promise<boolean> {
     const session = this.getSession(repositoryId);
     if (
@@ -212,7 +276,7 @@ export class AgentApplication {
     ) {
       return Promise.resolve(false);
     }
-    const request = { id: randomUUID(), repositoryId, kind, details };
+    const request = { ...permission, id: randomUUID(), repositoryId };
     return new Promise((resolve) => {
       this.permissions.set(request.id, { request, resolve });
       this.onChange();
@@ -227,6 +291,55 @@ export class AgentApplication {
     }
     this.permissions.delete(id);
     pending.resolve(approve);
+    this.onChange();
+  }
+
+  askQuestion(
+    repositoryId: string,
+    question: UserInputRequest,
+  ): Promise<UserInputResponse> {
+    this.assertOpen();
+    const session = this.getSession(repositoryId);
+    if (
+      session.controller?.signal.aborted ||
+      !["starting", "busy"].includes(session.status)
+    ) {
+      throw new DOMException("The request was cancelled.", "AbortError");
+    }
+    const request: PendingQuestion = {
+      ...question,
+      choices: question.choices ? [...question.choices] : undefined,
+      id: randomUUID(),
+      repositoryId,
+    };
+    session.messages.push({ role: "assistant", content: question.question });
+    return new Promise((resolve, reject) => {
+      this.questions.set(request.id, { request, resolve, reject });
+      this.onChange();
+    });
+  }
+
+  answerQuestion(id: string, answer: string): void {
+    this.assertOpen();
+    const pending = this.questions.get(id);
+    if (!pending) {
+      throw new Error("This question is no longer pending.");
+    }
+    if (!answer.trim() || answer.length > MAX_PROMPT_LENGTH) {
+      throw new Error(
+        `The answer must contain between 1 and ${MAX_PROMPT_LENGTH} characters.`,
+      );
+    }
+    const wasFreeform = !pending.request.choices?.includes(answer);
+    if (wasFreeform && pending.request.allowFreeform === false) {
+      throw new Error("Choose one of the proposed answers.");
+    }
+    this.questions.delete(id);
+    this.getSession(pending.request.repositoryId).messages.push({
+      role: "user",
+      content: answer,
+    });
+    pending.resolve({ answer, wasFreeform });
     this.onChange();
   }
 
@@ -250,35 +363,54 @@ export class AgentApplication {
         `The draft must not exceed ${MAX_PROMPT_LENGTH} characters.`,
       );
     }
-    this.getSession(id).draft = text;
+    const session = this.getSession(id);
+    this.assertAvailable(session);
+    session.draft = text;
     this.onChange();
   }
 
   async restart(id: string): Promise<void> {
     this.assertOpen();
-    const session = this.getSession(id);
-    if (session.status === "starting" || session.status === "busy") {
+    const current = this.getSession(id);
+    this.assertAvailable(current);
+    if (current.status === "starting" || current.status === "busy") {
       throw new Error(
         "Cancel the running operation before starting a new session.",
       );
     }
-    await session.conversation?.dispose();
-    session.conversation = undefined;
-    session.sessionId = undefined;
-    session.status = "idle";
-    session.messages.push({
-      role: "system",
-      content:
-        "Starting a new Copilot session. Earlier messages are kept for reference, not replayed as context.",
+    return this.manageSession(id, async (session) => {
+      await this.stopSession(session);
+      if (this.hasConversation(session)) {
+        session.history.push(this.copyConversation(session));
+      }
+      const messages = session.messages;
+      this.restoreConversation(session);
+      session.messages = messages;
+      session.messages.push({
+        role: "system",
+        content:
+          "Starting a new Copilot session. Earlier messages are kept for reference, not replayed as context.",
+      });
+      this.activeId = id;
+      await this.startSession(session);
     });
-    await this.select(id);
   }
 
   async select(id: string): Promise<void> {
     this.assertOpen();
     const session = this.getSession(id);
+    this.assertAvailable(session);
     this.activeId = id;
     this.onChange();
+    await this.startSession(session);
+  }
+
+  private async startSession(session: RepositorySession): Promise<void> {
+    const id = session.repository.id;
+    this.assertOpen();
+    if (session.removed) {
+      throw new Error("The repository is no longer available.");
+    }
     if (session.status === "starting") {
       return session.starting;
     }
@@ -286,6 +418,16 @@ export class AgentApplication {
       return;
     }
     const previous = session.conversation;
+    if (
+      previous?.sessionId &&
+      !session.sessionId &&
+      !session.history.some((entry) => entry.sessionId === previous.sessionId)
+    ) {
+      session.history.push({
+        ...this.copyConversation(session),
+        sessionId: previous.sessionId,
+      });
+    }
     if ((previous || session.messages.length > 0) && !session.sessionId) {
       session.messages.push({
         role: "system",
@@ -302,6 +444,9 @@ export class AgentApplication {
       try {
         await previous?.dispose();
         this.assertOpen();
+        if (session.removed) {
+          throw new Error("The repository is no longer available.");
+        }
         const conversation = this.createConversation(session.repository);
         session.conversation = conversation;
         session.eventMessages.clear();
@@ -333,7 +478,7 @@ export class AgentApplication {
         throw error;
       } finally {
         session.starting = undefined;
-        this.rejectPermissions(id);
+        this.clearPendingRequests(id);
         this.onChange();
       }
     };
@@ -344,6 +489,7 @@ export class AgentApplication {
   async send(id: string, question: string): Promise<void> {
     this.assertOpen();
     const session = this.getSession(id);
+    this.assertAvailable(session);
     if (
       id !== this.activeId ||
       session.status !== "ready" ||
@@ -387,7 +533,7 @@ export class AgentApplication {
         this.fail(session, error);
         throw error;
       } finally {
-        this.rejectPermissions(id);
+        this.clearPendingRequests(id);
         this.onChange();
       }
     };
@@ -404,8 +550,149 @@ export class AgentApplication {
     this.assertOpen();
     const session = this.getSession(id);
     session.controller?.abort();
-    this.rejectPermissions(id);
+    this.clearPendingRequests(id);
     this.onChange();
+  }
+
+  closeSession(id: string): Promise<void> {
+    return this.manageSession(id, async (session) => {
+      await this.stopSession(session);
+      session.generation++;
+    });
+  }
+
+  newSession(id: string): Promise<void> {
+    return this.manageSession(id, async (session) => {
+      await this.stopSession(session);
+      if (this.hasConversation(session)) {
+        session.history.push(this.copyConversation(session));
+      }
+      this.restoreConversation(session);
+      this.activeId = id;
+      await this.startSession(session);
+    });
+  }
+
+  deleteSessions(id: string, all: boolean): Promise<void> {
+    return this.manageSession(id, async (session) => {
+      await this.stopSession(session);
+      this.assertOpen();
+      if (session.removed) {
+        throw new Error("The repository is no longer available.");
+      }
+      const cleaner = this.createConversation(session.repository);
+      session.conversation = cleaner;
+      const controller = new AbortController();
+      session.controller = controller;
+      try {
+        do {
+          if (!this.hasConversation(session)) {
+            const previous = session.history.pop();
+            if (!previous) {
+              break;
+            }
+            this.restoreConversation(session, previous);
+          }
+          if (session.sessionId) {
+            await cleaner.deleteSession(session.sessionId, controller.signal);
+          }
+          this.restoreConversation(session, session.history.pop());
+          this.onChange();
+        } while (all && this.hasConversation(session));
+      } finally {
+        await cleaner.dispose();
+        session.conversation = undefined;
+        session.controller = undefined;
+      }
+    });
+  }
+
+  private manageSession(
+    id: string,
+    action: (session: RepositorySession) => Promise<void>,
+  ): Promise<void> {
+    this.assertOpen();
+    const session = this.getSession(id);
+    this.assertAvailable(session);
+    const operation = Promise.resolve()
+      .then(() => {
+        this.assertOpen();
+        return action(session);
+      })
+      .catch((error: unknown) => {
+        this.fail(session, error);
+        throw error;
+      })
+      .finally(() => {
+        session.managing = undefined;
+        this.onChange();
+      });
+    session.managing = operation;
+    this.onChange();
+    return operation;
+  }
+
+  private async stopSession(session: RepositorySession): Promise<void> {
+    const conversation = session.conversation;
+    const sessionId = session.sessionId;
+    if (session.status === "busy" || session.status === "starting") {
+      session.messages.push({
+        role: "system",
+        content:
+          "The operation was interrupted when this session was closed. It will not be resumed automatically.",
+      });
+    }
+    session.controller?.abort();
+    this.clearPendingRequests(session.repository.id);
+    await conversation?.dispose();
+    await Promise.allSettled([
+      ...(session.starting ? [session.starting] : []),
+      ...(session.sending ? [session.sending] : []),
+    ]);
+    session.sessionId = sessionId ?? conversation?.sessionId;
+    session.conversation = undefined;
+    session.controller = undefined;
+    session.error = undefined;
+    session.status = session.sessionId ? "saved" : "idle";
+    session.eventMessages.clear();
+  }
+
+  private restoreConversation(
+    session: RepositorySession,
+    saved?: SavedConversation,
+  ): void {
+    session.sessionId = saved?.sessionId;
+    session.messages = saved?.messages.map((message) => ({ ...message })) ?? [];
+    session.draft = saved?.draft ?? "";
+    session.status = saved?.sessionId ? "saved" : "idle";
+    session.error = undefined;
+    session.generation++;
+    session.eventMessages.clear();
+  }
+
+  private assertAvailable(session: RepositorySession): void {
+    if (session.removed) {
+      throw new Error("The repository is no longer available.");
+    }
+    if (session.managing) {
+      throw new Error(
+        "A session management operation is already running for this repository.",
+      );
+    }
+  }
+
+  private hasConversation(session: SavedConversation): boolean {
+    return Boolean(
+      session.sessionId || session.draft || session.messages.length,
+    );
+  }
+
+  private copyConversation(session: SavedConversation): SavedConversation {
+    return {
+      sessionId: session.sessionId,
+      draft: session.draft,
+      messages: session.messages.map((message) => ({ ...message })),
+    };
   }
 
   dispose(): Promise<void> {
@@ -414,7 +701,7 @@ export class AgentApplication {
 
   private async stop(): Promise<void> {
     this.closed = true;
-    this.rejectPermissions();
+    this.clearPendingRequests();
     for (const session of this.sessions.values()) {
       if (session.status === "busy" || session.status === "starting") {
         session.messages.push({
@@ -434,6 +721,7 @@ export class AgentApplication {
       [...this.sessions.values()].flatMap((session) => [
         ...(session.starting ? [session.starting] : []),
         ...(session.sending ? [session.sending] : []),
+        ...(session.managing ? [session.managing] : []),
       ]),
     );
   }
@@ -441,17 +729,26 @@ export class AgentApplication {
   private saveSession(session: RepositorySession): SavedRepositorySession {
     return {
       id: session.repository.id,
-      sessionId: session.sessionId,
-      draft: session.draft,
-      messages: session.messages.map((message) => ({ ...message })),
+      ...this.copyConversation(session),
+      history: session.history.length
+        ? session.history.map((entry) => this.copyConversation(entry))
+        : undefined,
     };
   }
 
-  private rejectPermissions(repositoryId?: string): void {
+  private clearPendingRequests(repositoryId?: string): void {
     for (const [id, pending] of this.permissions) {
       if (!repositoryId || pending.request.repositoryId === repositoryId) {
         this.permissions.delete(id);
         pending.resolve(false);
+      }
+    }
+    for (const [id, pending] of this.questions) {
+      if (!repositoryId || pending.request.repositoryId === repositoryId) {
+        this.questions.delete(id);
+        pending.reject(
+          new DOMException("The question was cancelled.", "AbortError"),
+        );
       }
     }
   }
@@ -545,38 +842,52 @@ export class AgentApplication {
           `${event.data.toolCallId} (${event.data.stream ?? "stdout"})`,
         );
         break;
+      case "assistant.tool_call_delta":
+        upsert(
+          `tool-input:${event.data.toolCallId}`,
+          "system",
+          event.data.inputDelta,
+          true,
+          `Tool input: ${event.data.toolName ?? event.data.toolCallId}`,
+        );
+        break;
       default: {
-        const tool =
-          event.type.startsWith("tool.") ||
-          event.type === "assistant.tool_call_delta";
         const message: ChatMessage = {
-          role: tool ? "tool" : "system",
+          role: "system",
           title: event.type,
           content: JSON.stringify(event.data, null, 2),
           timestamp: event.timestamp,
           agentId: event.agentId,
         };
         if (event.type === "tool.execution_start") {
-          message.title = `Tool: ${event.data.toolName}`;
-          const args = event.data.arguments;
-          if (
-            args &&
-            typeof args === "object" &&
-            !Array.isArray(args) &&
-            typeof args.command === "string"
-          ) {
-            message.content = args.command;
-            message.details = JSON.stringify(event.data, null, 2);
-          }
+          message.role = "tool";
+          message.title = `${event.data.toolName} - running`;
+          message.content = describeTool(
+            event.data.toolName,
+            event.data.arguments,
+          );
+          message.details = JSON.stringify(event.data, null, 2);
+          session.eventMessages.set(
+            `${event.agentId ?? ""}:tool:${event.data.toolCallId}`,
+            message,
+          );
         } else if (event.type === "tool.execution_complete") {
+          const tool = session.eventMessages.get(
+            `${event.agentId ?? ""}:tool:${event.data.toolCallId}`,
+          );
+          if (tool?.title) {
+            tool.title =
+              tool.title?.replace(/ - running$/, "") +
+              (event.data.success ? " - completed" : " - failed");
+          }
           message.role = "output";
+          message.error = !event.data.success;
           message.title = `Tool ${event.data.toolCallId}: ${event.data.success ? "completed" : "failed"}`;
-          message.content = [
-            event.data.result?.content,
-            event.data.error?.message,
-          ]
-            .filter((part) => part !== undefined)
-            .join("\n");
+          message.content =
+            [event.data.result?.content, event.data.error?.message]
+              .filter((part) => part !== undefined)
+              .join("\n") ||
+            (event.data.success ? "Completed" : "Tool execution failed.");
           message.details = JSON.stringify(event.data, null, 2);
         } else if (event.type === "tool.execution_partial_result") {
           upsert(

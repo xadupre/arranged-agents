@@ -82,8 +82,11 @@ async function main(): Promise<void> {
       remembered.includes(marker),
       "The resumed session lost its earlier context.",
     );
+    await resumed.dispose();
+    resumed = new CopilotConversation(options);
+    await resumed.deleteSession(sessionId, signal);
     console.log(
-      "Local Copilot CLI, file access, live tool events, stop/resume context and rendering: OK",
+      "Local Copilot CLI, file access, live tool events, stop/resume context, SDK session deletion and rendering: OK",
     );
   } finally {
     try {

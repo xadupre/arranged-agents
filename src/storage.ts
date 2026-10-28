@@ -3,11 +3,15 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatMessage } from "./application";
 
-export interface SavedRepositorySession {
-  id: string;
+export interface SavedConversation {
   sessionId?: string;
   draft: string;
   messages: ChatMessage[];
+}
+
+export interface SavedRepositorySession extends SavedConversation {
+  id: string;
+  history?: SavedConversation[];
 }
 
 export interface SavedApplication {
@@ -29,10 +33,37 @@ function isMessage(value: unknown): value is ChatMessage {
       value.role,
     ) &&
     typeof value.content === "string" &&
+    (value.error === undefined || typeof value.error === "boolean") &&
     ["title", "timestamp", "agentId", "details"].every(
       (key) => value[key] === undefined || typeof value[key] === "string",
     )
   );
+}
+
+function parseConversation(value: unknown): SavedConversation {
+  if (
+    !isRecord(value) ||
+    typeof value.draft !== "string" ||
+    (value.sessionId !== undefined &&
+      (typeof value.sessionId !== "string" || !value.sessionId)) ||
+    !Array.isArray(value.messages) ||
+    !value.messages.every(isMessage)
+  ) {
+    throw new Error("Invalid conversation in saved Arranged Agents history.");
+  }
+  return {
+    sessionId: value.sessionId,
+    draft: value.draft,
+    messages: value.messages.map((message) => ({
+      role: message.role,
+      content: message.content,
+      title: message.title,
+      timestamp: message.timestamp,
+      agentId: message.agentId,
+      details: message.details,
+      error: message.error,
+    })),
+  };
 }
 
 function parseSavedApplication(value: unknown, root: string): SavedApplication {
@@ -52,27 +83,15 @@ function parseSavedApplication(value: unknown, root: string): SavedApplication {
         !isRecord(session) ||
         typeof session.id !== "string" ||
         ids.has(session.id) ||
-        typeof session.draft !== "string" ||
-        (session.sessionId !== undefined &&
-          (typeof session.sessionId !== "string" || !session.sessionId)) ||
-        !Array.isArray(session.messages) ||
-        !session.messages.every(isMessage)
+        (session.history !== undefined && !Array.isArray(session.history))
       ) {
         throw new Error("Invalid repository in saved Arranged Agents history.");
       }
       ids.add(session.id);
       return {
         id: session.id,
-        sessionId: session.sessionId,
-        draft: session.draft,
-        messages: session.messages.map((message) => ({
-          role: message.role,
-          content: message.content,
-          title: message.title,
-          timestamp: message.timestamp,
-          agentId: message.agentId,
-          details: message.details,
-        })),
+        ...parseConversation(session),
+        history: session.history?.map(parseConversation),
       };
     },
   );

@@ -34,6 +34,18 @@ async function setup(t: TestContext) {
 
 test("history saves are atomic, serialized, private and isolated by launch root", async (t) => {
   const { directory, snapshot } = await setup(t);
+  snapshot.sessions[0]!.messages.push({
+    role: "output",
+    content: "Command failed",
+    error: true,
+  });
+  snapshot.sessions[0]!.history = [
+    {
+      sessionId: "older-session",
+      draft: "Older draft",
+      messages: [{ role: "user", content: "Earlier conversation" }],
+    },
+  ];
   const storage = new ApplicationStorage(directory, snapshot.root);
   assert.equal(await storage.load(), undefined);
   const later = {
@@ -68,6 +80,10 @@ test("corrupt or mismatched history fails explicitly without overwriting the sav
     "{broken",
     JSON.stringify({ ...snapshot, version: 2 }),
     JSON.stringify({ ...snapshot, root: "/different-root" }),
+    JSON.stringify({
+      ...snapshot,
+      sessions: [{ ...snapshot.sessions[0], history: [{}] }],
+    }),
     JSON.stringify({
       ...snapshot,
       sessions: [

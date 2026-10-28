@@ -42,20 +42,25 @@ Trust the workspace. The right panel lists only immediate subdirectories with
 a ``.git`` directory or file, including Git worktrees. It does not scan recursively
 or follow directory symlinks. The left panel is intentionally empty.
 
-Click a repository to start its Copilot session. When **Session ready** appears,
+Click a repository to start its Copilot session. When **Session open - ready** appears,
 enter a message in the central panel and press **Enter** or click **Send**, for example:
 
 .. code-block:: text
 
    Explain AbortController in three points and give a TypeScript example.
 
-Use **Shift+Enter** for a new line. Responses and tool activity appear as they
-arrive: commands, outputs, errors, available reasoning and session events.
-All categories are visible initially. Use the checkboxes above the conversation
-to hide or restore categories without changing execution or losing history.
-**Event details** expands the raw metadata of tool calls and results.
-Uncheck **Session / events** to hide these details as well as session messages,
-while keeping commands and output visible through their own filters.
+Use **Shift+Enter** for a new line. By default, the transcript shows messages and
+concise command/tool summaries, including completion status. Errors stay visible.
+Check **Reasoning**, **Output** or **Session / events (JSON)** to add details;
+uncheck **Messages** or **Commands / tools** to hide them. These filters do not
+change execution or delete history. Technical streaming fragments are grouped
+instead of filling the conversation with individual events.
+**Session / events (JSON)** also reveals timestamps and expandable **Event details**.
+
+Permission requests show descriptions, full commands, paths or proposed changes,
+not raw JSON. Copilot's questions have clickable choices and, when allowed, a text
+answer box. Use Enter to reply or Shift+Enter for another line. Pending questions
+remain visible even when transcript categories are hidden.
 
 The center renders Markdown headings, lists, tables and code blocks as HTML.
 It also renders inline ``$x^2$`` and display ``$$E=mc^2$$`` equations using native
@@ -63,6 +68,13 @@ MathML. No remote math assets are loaded. HTTP/HTTPS links, including plain URLs
 in tool output, open in the external browser.
 
 Switching repositories preserves each conversation and its unfinished draft.
+The first box on the right, **Active sessions**, groups open sessions and those
+starting or being updated. **Other repositories** lists the rest, without duplicates.
+Repositories move between boxes automatically when their session opens or closes.
+Open sessions have a green-tinted background and a solid indicator in the repository
+list. During startup or work, a blue tint and spinner show activity, even for
+background repositories. Selection keeps its own border, independently of session
+status. Closed, saved sessions are not marked as open.
 **Refresh** rescans the parent directory while keeping sessions that still exist.
 **Cancel** ends the selected repository's operation and session; click that
 repository again to start a new one. Earlier messages are kept on screen as
@@ -81,6 +93,21 @@ reference, not replaying it to the model.
 
 History is stored in private, unencrypted JSON files beneath the extension's
 VS Code global storage, outside the repositories.
+
+Manage sessions with the repository menu
+----------------------------------------
+
+Right-click any repository, or focus it and press **Shift+F10**, without needing
+to select it first. **Close session** stops Copilot and preserves its context for
+the next click. **New session** archives the old conversation and starts blank.
+
+**Delete latest session** removes the newest conversation and restores the
+previous saved one, if any, without launching Copilot. **Delete all sessions for
+this repository** removes this repository's current and archived conversations.
+Both require inline confirmation and permanently delete the corresponding
+Copilot histories through the SDK, not just the visible transcript. Other
+repositories, unrelated CLI sessions and Git files are untouched. A deletion
+failure is displayed; remaining histories are kept so you can retry.
 
 Configuration and remote workspaces
 -----------------------------------

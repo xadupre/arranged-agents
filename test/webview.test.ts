@@ -33,7 +33,7 @@ async function setup(t: TestContext) {
       new dom.window.MessageEvent("message", {
         data: {
           type: "state",
-          state: {
+          state: structuredClone({
             ...state,
             messages: state.messages.map((message) => ({
               ...message,
@@ -42,7 +42,7 @@ async function setup(t: TestContext) {
                   ? renderMarkdown(message.content)
                   : renderText(message.content),
             })),
-          },
+          }),
         },
       }),
     );
@@ -56,6 +56,7 @@ async function setup(t: TestContext) {
     ],
     messages: [],
     permissions: [],
+    questions: [],
   };
   const document = dom.window.document;
   return { dom, document, posted, publish, state };
@@ -83,6 +84,173 @@ test("the tab has an empty left panel and starts no session until a repository i
   ]);
 });
 
+test("the first repository box groups active sessions and moves closed sessions back without duplicates", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  const started = document.getElementById("started-repositories");
+  const others = document.getElementById("other-repositories");
+  assert.ok(started && others);
+  const ids = (group: HTMLElement): string[] =>
+    [...group.querySelectorAll<HTMLButtonElement>(".repository")].map(
+      (button) => button.dataset.repositoryId!,
+    );
+  publish(state);
+  assert.equal(
+    document.querySelector(".repository-group h3")?.textContent,
+    "Active sessions",
+  );
+  assert.deepEqual(ids(started), []);
+  assert.match(started.textContent ?? "", /No active session/);
+  assert.deepEqual(ids(others), ["alpha", "beta"]);
+  for (const status of ["starting", "ready", "busy", "stopping"] as const) {
+    state.repositories[1]!.status = status;
+    publish(state);
+    assert.deepEqual(ids(started), ["beta"]);
+    assert.deepEqual(ids(others), ["alpha"]);
+    assert.equal(document.querySelectorAll(".repository").length, 2);
+  }
+  state.repositories[1]!.status = "ready";
+  publish(state);
+  started.querySelector<HTMLButtonElement>(".repository")?.click();
+  assert.deepEqual(posted.at(-1), { type: "select", id: "beta" });
+  started.querySelector<HTMLButtonElement>(".repository")?.dispatchEvent(
+    new dom.window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    }),
+  );
+  document
+    .querySelector<HTMLButtonElement>('[data-action="close-session"]')
+    ?.click();
+  assert.deepEqual(posted.at(-1), { type: "close-session", id: "beta" });
+  for (const status of ["saved", "error", "idle"] as const) {
+    state.repositories[1]!.status = status;
+    publish(state);
+    assert.deepEqual(ids(started), []);
+    assert.deepEqual(ids(others), ["alpha", "beta"]);
+  }
+  state.repositories.forEach((repository) => {
+    repository.status = "ready";
+  });
+  publish(state);
+  assert.deepEqual(ids(started), ["alpha", "beta"]);
+  assert.deepEqual(ids(others), []);
+  assert.match(
+    others.textContent ?? "",
+    /All repositories have an active session/,
+  );
+  state.repositories = [];
+  publish(state);
+  assert.match(started.textContent ?? "", /No active session/);
+  assert.match(others.textContent ?? "", /No direct child repository/);
+  assert.equal(document.querySelectorAll(".repository").length, 0);
+});
+
+test("right-click menus manage the clicked repository and confirm irreversible deletion without popups", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.repositories.forEach((entry) => {
+    entry.status = "ready";
+    entry.sessionCount = 2;
+  });
+  state.activeId = "alpha";
+  publish(state);
+  const menu = document.getElementById("repository-menu");
+  assert.ok(menu);
+  const open = (id: string): HTMLButtonElement => {
+    const repository = [
+      ...document.querySelectorAll<HTMLButtonElement>(".repository"),
+    ].find((button) => button.dataset.repositoryId === id);
+    assert.ok(repository);
+    const event = new dom.window.MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+      clientX: 100,
+      clientY: 100,
+    });
+    repository.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, true);
+    assert.equal(menu.hidden, false);
+    return repository;
+  };
+  const action = (name: string): HTMLButtonElement => {
+    const button = menu.querySelector<HTMLButtonElement>(
+      `[data-action="${name}"]`,
+    );
+    assert.ok(button);
+    return button;
+  };
+  open("beta");
+  assert.deepEqual(posted, [{ type: "ready" }]);
+  const close = action("close-session");
+  state.repositories[0]!.status = "busy";
+  publish(state);
+  assert.equal(document.activeElement, close);
+  close.click();
+  assert.deepEqual(posted.at(-1), { type: "close-session", id: "beta" });
+  open("alpha");
+  action("new-session").click();
+  assert.deepEqual(posted.at(-1), { type: "new-session", id: "alpha" });
+  open("beta");
+  const count = posted.length;
+  action("delete-last-session").click();
+  assert.equal(menu.hidden, false);
+  assert.equal(posted.length, count);
+  assert.match(menu.textContent ?? "", /latest session.*Beta.*Copilot history/);
+  action("delete-last-session").click();
+  assert.deepEqual(posted.at(-1), { type: "delete-last-session", id: "beta" });
+  open("beta");
+  action("delete-all-sessions").click();
+  menu.querySelector<HTMLButtonElement>("button:last-child")?.click();
+  assert.equal(posted.length, count + 1);
+  const beta = open("beta");
+  menu.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+  );
+  assert.equal(menu.hidden, true);
+  assert.equal(document.activeElement, beta);
+  beta.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "F10", shiftKey: true }),
+  );
+  assert.equal(menu.hidden, false);
+  menu.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "End" }));
+  assert.equal(document.activeElement, action("delete-all-sessions"));
+  action("delete-all-sessions").click();
+  action("delete-all-sessions").click();
+  assert.deepEqual(posted.at(-1), { type: "delete-all-sessions", id: "beta" });
+  state.repositories[1]!.sessionCount = 0;
+  state.repositories[1]!.status = "idle";
+  publish(state);
+  open("beta");
+  assert.equal(action("close-session").disabled, true);
+  assert.equal(action("delete-last-session").disabled, true);
+  assert.equal(action("new-session").disabled, false);
+  document.getElementById("root")?.click();
+  assert.equal(menu.hidden, true);
+});
+
+test("fresh and restored sessions replace cached drafts even when the repository stays selected", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  state.repositories[0]!.generation = 0;
+  publish(state);
+  const input = document.querySelector<HTMLTextAreaElement>("#question");
+  assert.ok(input);
+  input.value = "Old draft";
+  state.repositories[0]!.generation = 1;
+  state.draft = "";
+  publish(state);
+  assert.equal(input.value, "");
+  input.value = "New draft";
+  state.activeId = "beta";
+  publish(state);
+  state.repositories[0]!.generation = 2;
+  publish(state);
+  state.activeId = "alpha";
+  state.draft = "Restored older draft";
+  publish(state);
+  assert.equal(input.value, "Restored older draft");
+});
+
 test("activity icons follow startup and generation independently for each repository", async (t) => {
   const { document, publish, state } = await setup(t);
   const icon = document.getElementById("activity-icon");
@@ -106,6 +274,55 @@ test("activity icons follow startup and generation independently for each reposi
   publish(state);
   assert.equal(icon.hidden, true);
   assert.equal(document.querySelectorAll(".repository .spinner").length, 0);
+});
+
+test("repository indicators distinguish an open session from work independently of selection", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "beta";
+  const alpha = state.repositories[0]!;
+  const repository = (): HTMLButtonElement => {
+    const button = document.querySelector<HTMLButtonElement>(
+      '[data-repository-id="alpha"]',
+    );
+    assert.ok(button);
+    return button;
+  };
+  alpha.status = "ready";
+  publish(state);
+  assert.equal(repository().getAttribute("aria-pressed"), "false");
+  assert.equal(repository().classList.contains("session-open"), true);
+  assert.equal(repository().classList.contains("session-working"), false);
+  assert.ok(repository().querySelector(".session-indicator"));
+  assert.match(repository().textContent ?? "", /Session open - ready/);
+  alpha.status = "busy";
+  publish(state);
+  assert.equal(repository().classList.contains("session-open"), true);
+  assert.equal(repository().classList.contains("session-working"), true);
+  assert.equal(repository().getAttribute("aria-busy"), "true");
+  assert.ok(repository().querySelector(".spinner"));
+  assert.equal(repository().querySelector(".session-indicator"), null);
+  assert.match(repository().textContent ?? "", /Copilot is working/);
+  assert.equal(
+    document.querySelector('[data-repository-id="beta"]')?.className,
+    "repository",
+  );
+  state.activeId = "alpha";
+  alpha.status = "ready";
+  publish(state);
+  assert.equal(repository().getAttribute("aria-pressed"), "true");
+  assert.equal(repository().classList.contains("session-open"), true);
+  assert.equal(repository().classList.contains("session-working"), false);
+  for (const status of ["saved", "error", "idle"] as const) {
+    alpha.status = status;
+    publish(state);
+    assert.equal(repository().classList.contains("session-open"), false);
+    assert.equal(repository().classList.contains("session-working"), false);
+    assert.equal(repository().getAttribute("aria-busy"), "false");
+    assert.equal(
+      repository().querySelector(".session-indicator, .spinner"),
+      null,
+    );
+  }
 });
 
 test("both panel dividers resize with pointer and keyboard while preserving positive panel widths", async (t) => {
@@ -286,7 +503,7 @@ test("clicking rendered URLs asks the extension to open the browser without webv
   assert.equal(document.querySelector(".message.output script"), null);
 });
 
-test("all information is visible by default and category filters only change display", async (t) => {
+test("the default transcript is concise and optional filters reveal information without changing history", async (t) => {
   const { document, posted, publish, state } = await setup(t);
   state.repositories[0]!.status = "ready";
   state.activeId = "alpha";
@@ -304,11 +521,18 @@ test("all information is visible by default and category filters only change dis
     { role: "system", content: '{"status":"running"}' },
   ];
   publish(state);
-  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 6);
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 3);
   assert.equal(
     document.querySelectorAll("#information-filters input:checked").length,
-    5,
+    2,
   );
+  assert.equal(document.querySelector("details:not([hidden])"), null);
+  for (const filter of document.querySelectorAll<HTMLInputElement>(
+    "#information-filters input:not(:checked)",
+  )) {
+    filter.click();
+  }
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 6);
   assert.equal(document.querySelector(".message.tool script"), null);
   assert.match(
     document.querySelector(".message.tool pre")?.textContent ?? "",
@@ -383,6 +607,13 @@ test("Session / events also hides raw event details without hiding tools or outp
     { role: "system", content: "Session ready" },
   ];
   publish(state);
+  for (const category of ["output", "system"]) {
+    document
+      .querySelector<HTMLInputElement>(
+        `#information-filters input[value="${category}"]`,
+      )
+      ?.click();
+  }
   const filter = document.querySelector<HTMLInputElement>(
     '#information-filters input[value="system"]',
   );
@@ -435,12 +666,16 @@ test("inline permission controls remain visible across filters and repository ch
       id: "alpha-read",
       repositoryId: "alpha",
       kind: "read",
+      summary: "Read this file or directory?",
+      content: "<script>not executable</script>\nREADME.md",
       details: "<script>not executable</script>\nREADME.md",
     },
     {
       id: "beta-shell",
       repositoryId: "beta",
       kind: "shell",
+      summary: "Run this command?",
+      content: "gh pr list",
       details: "gh pr list",
     },
   ];
@@ -453,8 +688,15 @@ test("inline permission controls remain visible across filters and repository ch
   );
   assert.equal(permissions.querySelector("script"), null);
   assert.match(permissions.textContent ?? "", /<script>not executable/);
-  assert.match(permissions.textContent ?? "", /Copilot \(Alpha\): allow read/);
-  assert.match(permissions.textContent ?? "", /Copilot \(Beta\): allow shell/);
+  assert.match(
+    permissions.textContent ?? "",
+    /Copilot \(Alpha\): Read this file/,
+  );
+  assert.match(
+    permissions.textContent ?? "",
+    /Copilot \(Beta\): Run this command/,
+  );
+  assert.equal(permissions.querySelector("details:not([hidden])"), null);
   for (const filter of document.querySelectorAll<HTMLInputElement>(
     "#information-filters input",
   )) {
@@ -501,6 +743,134 @@ test("inline permission controls remain visible across filters and repository ch
   publish(state);
   assert.equal(permissions.hidden, true);
   assert.equal(permissions.children.length, 0);
+});
+
+test("technical tool fragments from saved histories stay hidden and failures remain visible", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.messages = [
+    {
+      role: "tool",
+      title: "assistant.tool_call_delta",
+      content: '{"inputDelta":"foo"}',
+    },
+    {
+      role: "tool",
+      title: "tool.execution_progress",
+      content: '{"progress":1}',
+    },
+    {
+      role: "tool",
+      title: "Tool: read",
+      content: '{"toolCallId":"old","arguments":{"path":"README.md"}}',
+    },
+    {
+      role: "tool",
+      title: "bash - completed",
+      content: "git status",
+      timestamp: "2026-10-28T12:00:00Z",
+    },
+    { role: "output", content: "Permission denied", error: true },
+    {
+      role: "output",
+      title: "Tool old: failed",
+      content: "Previous command failed",
+    },
+  ];
+  publish(state);
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 3);
+  assert.equal(document.querySelector("#messages time"), null);
+  const system = document.querySelector<HTMLInputElement>(
+    'input[value="system"]',
+  );
+  assert.ok(system);
+  system.click();
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 6);
+  assert.ok(document.querySelector("#messages time"));
+  system.click();
+  document.querySelector<HTMLInputElement>('input[value="tools"]')?.click();
+  assert.deepEqual(
+    [...document.querySelectorAll(".message:not([hidden]) .content")].map(
+      (content) => content.textContent,
+    ),
+    ["Permission denied", "Previous command failed"],
+  );
+});
+
+test("Copilot questions use safe choice buttons and editable answers rather than JSON", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.questions = [
+    {
+      id: "choice",
+      repositoryId: "alpha",
+      question: "Which tests?",
+      choices: ["Targeted", "All"],
+      allowFreeform: false,
+    },
+    {
+      id: "text",
+      repositoryId: "beta",
+      question: "<script>Which files?</script>",
+      choices: ["README"],
+      allowFreeform: true,
+    },
+  ];
+  publish(state);
+  const cards = document.querySelectorAll<HTMLFormElement>(".agent-question");
+  assert.equal(cards.length, 2);
+  assert.equal(cards[0]?.querySelector("textarea"), null);
+  assert.equal(document.querySelector("#questions script"), null);
+  assert.match(cards[1]?.textContent ?? "", /<script>Which files\?<\/script>/);
+  assert.equal(
+    document.getElementById("questions")?.closest("[aria-live]"),
+    null,
+  );
+  cards[0]?.querySelector<HTMLButtonElement>("button")?.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "answer",
+    id: "choice",
+    answer: "Targeted",
+  });
+  const input = cards[1]?.querySelector("textarea");
+  assert.ok(input);
+  input.value = "src/example.ts\nREADME.md";
+  input.dispatchEvent(new dom.window.Event("input"));
+  input.focus();
+  publish(state);
+  assert.equal(document.activeElement, input);
+  assert.equal(input.value, "src/example.ts\nREADME.md");
+  for (const options of [{ shiftKey: true }, { isComposing: true }]) {
+    const event = new dom.window.KeyboardEvent("keydown", {
+      key: "Enter",
+      cancelable: true,
+      ...options,
+    });
+    input.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  input.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+  );
+  input.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true }),
+  );
+  assert.deepEqual(
+    posted.filter((message) => message.type === "answer"),
+    [
+      { type: "answer", id: "choice", answer: "Targeted" },
+      { type: "answer", id: "text", answer: "src/example.ts\nREADME.md" },
+    ],
+  );
+  state.questions = [
+    { id: "cancel", repositoryId: "beta", question: "Continue?" },
+  ];
+  publish(state);
+  document
+    .querySelector<HTMLButtonElement>(".agent-question > button:last-child")
+    ?.click();
+  assert.deepEqual(posted.at(-1), { type: "cancel", id: "beta" });
+  state.questions = [];
+  publish(state);
+  assert.equal(document.getElementById("questions")?.hidden, true);
 });
 
 test("repository switching keeps drafts separate and failed submissions remain editable", async (t) => {

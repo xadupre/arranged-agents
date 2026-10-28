@@ -199,6 +199,15 @@ h2 {
   overflow-wrap: anywhere;
 }
 
+.message.tool pre.content {
+  max-height: 6em;
+  overflow: auto;
+}
+
+.message.failed {
+  border-left: 2px solid var(--vscode-errorForeground);
+}
+
 summary {
   cursor: pointer;
   color: var(--vscode-descriptionForeground);
@@ -324,6 +333,18 @@ button:disabled {
   color: var(--vscode-descriptionForeground);
 }
 
+.repository-group {
+  margin-bottom: 12px;
+  padding: 10px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+}
+
+.repository-group h3 {
+  margin: 0 0 10px;
+  font-size: 0.9em;
+}
+
 .repository {
   display: block;
   width: 100%;
@@ -331,6 +352,7 @@ button:disabled {
   margin-bottom: 8px;
   color: var(--vscode-foreground);
   background: var(--vscode-sideBar-background);
+  border-inline-start-width: 3px;
   overflow-wrap: anywhere;
 }
 
@@ -338,6 +360,40 @@ button:disabled {
   border-color: var(--vscode-focusBorder);
   background: var(--vscode-list-activeSelectionBackground);
   color: var(--vscode-list-activeSelectionForeground);
+}
+
+.repository.session-open,
+.repository.session-open:hover:enabled {
+  color: var(--vscode-foreground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-testing-iconPassed, #388a34) 14%,
+    var(--vscode-sideBar-background, var(--vscode-editor-background))
+  );
+  border-inline-start-color: var(--vscode-testing-iconPassed, #388a34);
+}
+
+.repository.session-working,
+.repository.session-working:hover:enabled {
+  color: var(--vscode-foreground);
+  background: color-mix(
+    in srgb,
+    var(--vscode-progressBar-background, #0078d4) 18%,
+    var(--vscode-sideBar-background, var(--vscode-editor-background))
+  );
+  border-inline-start-color: var(--vscode-progressBar-background, #0078d4);
+}
+
+.session-indicator {
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--vscode-testing-iconPassed, #388a34);
+}
+
+.repository.session-working .spinner {
+  color: var(--vscode-progressBar-background, #0078d4);
 }
 
 .repository small {
@@ -351,21 +407,27 @@ button:disabled {
   white-space: pre-wrap;
 }
 
-#permissions {
+#interactions {
   max-height: 35vh;
   flex-shrink: 0;
   overflow: auto;
+}
+
+#permissions,
+#questions {
   padding: 0 24px;
 }
 
-.permission {
+.permission,
+.agent-question {
   border: 1px solid var(--vscode-focusBorder);
   padding: 12px;
   margin-bottom: 12px;
   overflow-wrap: anywhere;
 }
 
-.permission h3 {
+.permission h3,
+.agent-question h3 {
   margin: 0;
   font-size: 0.9em;
 }
@@ -378,4 +440,45 @@ button:disabled {
 .permission-actions {
   display: flex;
   gap: 8px;
+  flex-wrap: wrap;
+}
+
+.question-text {
+  white-space: pre-wrap;
+}
+
+.agent-question > button {
+  margin: 8px 8px 0 0;
+}
+
+#repository-menu {
+  position: fixed;
+  z-index: 10;
+  width: 280px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow: auto;
+  padding: 6px;
+  background: var(--vscode-menu-background, var(--vscode-editor-background));
+  color: var(--vscode-menu-foreground, var(--vscode-editor-foreground));
+  border: 1px solid var(--vscode-menu-border, var(--vscode-panel-border));
+  box-shadow: 0 2px 8px var(--vscode-widget-shadow);
+}
+
+#repository-menu button {
+  display: block;
+  width: 100%;
+  text-align: left;
+  color: inherit;
+  background: transparent;
+}
+
+#repository-menu button:hover:enabled,
+#repository-menu button:focus-visible {
+  color: var(--vscode-menu-selectionForeground);
+  background: var(--vscode-menu-selectionBackground);
+}
+
+#repository-menu p {
+  margin: 8px;
 }
