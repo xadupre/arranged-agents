@@ -1,7 +1,7 @@
 import * as vscode from "vscode";
 import { AgentApplication, parseApplicationMessage } from "./application";
 import { CopilotConversation } from "./conversation";
-import { renderApplication, renderMarkdown, renderText } from "./render";
+import { ConversationRenderer, renderApplication } from "./render";
 import { ApplicationStorage } from "./storage";
 import { describePermission } from "./presentation";
 import { GitHubPanel } from "./github-panel";
@@ -66,6 +66,8 @@ export function activate(context: vscode.ExtensionContext): void {
     );
     const saved = await storage.load();
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let publishTimer: ReturnType<typeof setTimeout> | undefined;
+    const renderer = new ConversationRenderer();
     let stopping = false;
     let stopped: Promise<void> | undefined;
     const github = new GitHubPanel((update) => {
@@ -82,6 +84,11 @@ export function activate(context: vscode.ExtensionContext): void {
           saveTimer = undefined;
           void storage.save(application.getSnapshot()).catch(saveFailure);
         }, 300);
+      }
+    };
+    const schedulePublish = (): void => {
+      if (!publishTimer && !stopping) {
+        publishTimer = setTimeout(publish, 30);
       }
     };
     const application: AgentApplication = new AgentApplication(
@@ -120,8 +127,9 @@ export function activate(context: vscode.ExtensionContext): void {
             return application.askQuestion(repository.id, request, requestId);
           },
         }),
-      () => {
-        publish();
+      (streaming) => {
+        if (streaming) schedulePublish();
+        else publish();
         scheduleSave();
       },
       saved,
@@ -130,6 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
       (stopped ??= (async () => {
         stopping = true;
         clearTimeout(saveTimer);
+        clearTimeout(publishTimer);
         try {
           await Promise.all([application.dispose(), github.dispose()]);
         } finally {
@@ -138,7 +147,9 @@ export function activate(context: vscode.ExtensionContext): void {
       })());
     let panel: vscode.WebviewPanel | undefined;
     const publish = (): void => {
-      if (!panel) {
+      clearTimeout(publishTimer);
+      publishTimer = undefined;
+      if (!panel || stopping) {
         return;
       }
       const state = application.getState();
@@ -146,13 +157,7 @@ export function activate(context: vscode.ExtensionContext): void {
         type: "state",
         state: {
           ...state,
-          messages: state.messages.map((message) => ({
-            ...message,
-            html:
-              message.role === "assistant" || message.role === "reasoning"
-                ? renderMarkdown(message.content)
-                : renderText(message.content),
-          })),
+          messages: renderer.render(state.activeId, state.messages),
         },
       });
     };

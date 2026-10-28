@@ -246,7 +246,7 @@ export class AgentApplication {
       repository: Repository,
       requestId?: string,
     ) => Conversation,
-    private readonly onChange: () => void,
+    private readonly onChange: (streaming?: boolean) => void,
     saved?: SavedApplication,
   ) {
     if (saved && saved.root !== root) {
@@ -1346,13 +1346,13 @@ export class AgentApplication {
             event.data.partialOutput,
             false,
           );
-          this.onChange();
+          this.onChange(true);
           return;
         }
         push(message);
       }
     }
-    this.onChange();
+    this.onChange(true);
   }
 
   private assertOpen(): void {

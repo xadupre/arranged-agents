@@ -21,6 +21,22 @@ declare function acquireVsCodeApi(): {
   const startedRepositories = element("started-repositories", HTMLElement);
   const otherRepositories = element("other-repositories", HTMLElement);
   const messages = element("messages", HTMLElement);
+  const messageCards: {
+    message: State["messages"][number];
+    showEventDetails: boolean;
+    article: HTMLElement;
+  }[] = [];
+  const messageFields = [
+    "role",
+    "content",
+    "html",
+    "title",
+    "agentId",
+    "timestamp",
+    "details",
+    "error",
+  ] as const;
+  let repositoriesRenderedKey: string | undefined;
   const permissions = element("permissions", HTMLElement);
   const permissionCards = new Map<string, HTMLElement>();
   const questions = element("questions", HTMLElement);
@@ -292,70 +308,77 @@ declare function acquireVsCodeApi(): {
       ? `Ask Copilot about ${active.name}...`
       : "Select a repository to begin.";
 
-    startedRepositories.replaceChildren();
-    otherRepositories.replaceChildren();
-    for (const repository of state.repositories) {
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "repository";
-      button.dataset.repositoryId = repository.id;
-      button.setAttribute("aria-haspopup", "menu");
-      button.setAttribute("aria-controls", "repository-menu");
-      button.setAttribute(
-        "aria-pressed",
-        String(repository.id === state.activeId),
-      );
-      button.title = repository.path;
-      const name = document.createElement("span");
-      name.className = "repository-name";
-      const running =
-        repository.status === "starting" ||
-        repository.status === "busy" ||
-        repository.status === "stopping";
-      const open =
-        repository.status === "ready" || repository.status === "busy";
-      button.classList.toggle("session-open", open);
-      button.classList.toggle("session-working", running);
-      button.setAttribute("aria-busy", String(running));
-      if (running || open) {
-        const icon = document.createElement("span");
-        icon.className = running ? "spinner" : "session-indicator";
-        icon.setAttribute("aria-hidden", "true");
-        name.append(icon);
-      }
-      name.append(document.createTextNode(repository.name));
-      const status = document.createElement("small");
-      status.textContent = statusLabels[repository.status];
-      button.append(name, status);
-      button.addEventListener("click", () =>
-        vscode.postMessage({ type: "select", id: repository.id }),
-      );
-      button.addEventListener("contextmenu", (event) => {
-        event.preventDefault();
-        openRepositoryMenu(repository.id, event.clientX, event.clientY);
-      });
-      button.addEventListener("keydown", (event) => {
-        if (
-          event.key === "ContextMenu" ||
-          (event.shiftKey && event.key === "F10")
-        ) {
-          event.preventDefault();
-          const bounds = button.getBoundingClientRect();
-          openRepositoryMenu(repository.id, bounds.left, bounds.bottom);
+    const repositoriesKey = JSON.stringify([
+      state.activeId,
+      state.repositories,
+    ]);
+    if (repositoriesRenderedKey !== repositoriesKey) {
+      repositoriesRenderedKey = repositoriesKey;
+      startedRepositories.replaceChildren();
+      otherRepositories.replaceChildren();
+      for (const repository of state.repositories) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "repository";
+        button.dataset.repositoryId = repository.id;
+        button.setAttribute("aria-haspopup", "menu");
+        button.setAttribute("aria-controls", "repository-menu");
+        button.setAttribute(
+          "aria-pressed",
+          String(repository.id === state.activeId),
+        );
+        button.title = repository.path;
+        const name = document.createElement("span");
+        name.className = "repository-name";
+        const running =
+          repository.status === "starting" ||
+          repository.status === "busy" ||
+          repository.status === "stopping";
+        const open =
+          repository.status === "ready" || repository.status === "busy";
+        button.classList.toggle("session-open", open);
+        button.classList.toggle("session-working", running);
+        button.setAttribute("aria-busy", String(running));
+        if (running || open) {
+          const icon = document.createElement("span");
+          icon.className = running ? "spinner" : "session-indicator";
+          icon.setAttribute("aria-hidden", "true");
+          name.append(icon);
         }
-      });
-      (open || running ? startedRepositories : otherRepositories).append(
-        button,
-      );
-    }
-    if (startedRepositories.children.length === 0) {
-      startedRepositories.textContent = "No active session.";
-    }
-    if (otherRepositories.children.length === 0) {
-      otherRepositories.textContent =
-        state.repositories.length === 0
-          ? "No direct child repository containing .git was found."
-          : "All repositories have an active session.";
+        name.append(document.createTextNode(repository.name));
+        const status = document.createElement("small");
+        status.textContent = statusLabels[repository.status];
+        button.append(name, status);
+        button.addEventListener("click", () =>
+          vscode.postMessage({ type: "select", id: repository.id }),
+        );
+        button.addEventListener("contextmenu", (event) => {
+          event.preventDefault();
+          openRepositoryMenu(repository.id, event.clientX, event.clientY);
+        });
+        button.addEventListener("keydown", (event) => {
+          if (
+            event.key === "ContextMenu" ||
+            (event.shiftKey && event.key === "F10")
+          ) {
+            event.preventDefault();
+            const bounds = button.getBoundingClientRect();
+            openRepositoryMenu(repository.id, bounds.left, bounds.bottom);
+          }
+        });
+        (open || running ? startedRepositories : otherRepositories).append(
+          button,
+        );
+      }
+      if (startedRepositories.children.length === 0) {
+        startedRepositories.textContent = "No active session.";
+      }
+      if (otherRepositories.children.length === 0) {
+        otherRepositories.textContent =
+          state.repositories.length === 0
+            ? "No direct child repository containing .git was found."
+            : "All repositories have an active session.";
+      }
     }
 
     renderPermissions();
@@ -942,22 +965,19 @@ declare function acquireVsCodeApi(): {
     const scrollTop = messages.scrollTop;
     const nearBottom =
       messages.scrollHeight - messages.scrollTop - messages.clientHeight < 60;
-    const expanded = new Set(
-      [...messages.querySelectorAll<HTMLDetailsElement>("details[open]")].map(
-        (details) => details.parentElement?.dataset.index,
+    const enabled = new Set(
+      [...filters.querySelectorAll<HTMLInputElement>("input:checked")].map(
+        (input) => input.value,
       ),
     );
-    messages.replaceChildren();
+    if (switched) {
+      messages.replaceChildren();
+      messageCards.length = 0;
+    }
     for (const [index, message] of (state?.messages ?? []).entries()) {
       const failed =
         message.error ||
         (message.role === "output" && message.title?.endsWith(": failed"));
-      const article = document.createElement("article");
-      article.className = `message ${message.role}`;
-      if (failed) {
-        article.classList.add("failed");
-      }
-      article.dataset.index = String(index);
       const category =
         message.role === "tool" &&
         (message.title === "assistant.tool_call_delta" ||
@@ -967,10 +987,24 @@ declare function acquireVsCodeApi(): {
             message.content.trimStart().startsWith("{")))
           ? "system"
           : categories[message.role];
-      const filter = filters.querySelector<HTMLInputElement>(
-        `input[value="${category}"]`,
-      );
-      article.hidden = !failed && filter?.checked === false;
+      const hidden = !failed && !enabled.has(category);
+      const previous = messageCards[index];
+      if (
+        previous &&
+        previous.showEventDetails === showEventDetails &&
+        messageFields.every(
+          (field) => previous.message[field] === message[field],
+        )
+      ) {
+        if (previous.article.hidden !== hidden)
+          previous.article.hidden = hidden;
+        continue;
+      }
+      const article = document.createElement("article");
+      article.className = `message ${message.role}`;
+      if (failed) article.classList.add("failed");
+      article.dataset.index = String(index);
+      article.hidden = hidden;
       const heading = document.createElement("h3");
       heading.textContent =
         (message.title ?? roleLabels[message.role]) +
@@ -998,7 +1032,8 @@ declare function acquireVsCodeApi(): {
       if (message.details) {
         const details = document.createElement("details");
         details.hidden = !showEventDetails;
-        details.open = !switched && expanded.has(String(index));
+        details.open =
+          previous?.article.querySelector("details")?.open ?? false;
         const summary = document.createElement("summary");
         summary.textContent = "Event details";
         const data = document.createElement("pre");
@@ -1006,7 +1041,12 @@ declare function acquireVsCodeApi(): {
         details.append(summary, data);
         article.append(details);
       }
-      messages.append(article);
+      if (previous) previous.article.replaceWith(article);
+      else messages.append(article);
+      messageCards[index] = { message, showEventDetails, article };
+    }
+    while (messageCards.length > (state?.messages.length ?? 0)) {
+      messageCards.pop()?.article.remove();
     }
     if (switched || nearBottom) {
       messages.scrollTop = messages.scrollHeight;
