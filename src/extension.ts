@@ -1,11 +1,11 @@
 import * as vscode from "vscode";
 import { AgentApplication, parseApplicationMessage } from "./application";
 import { CopilotConversation } from "./conversation";
-import { renderApplication, renderMarkdown, renderText } from "./render";
+import { ConversationRenderer, renderApplication } from "./render";
 import { ApplicationStorage } from "./storage";
 import { describePermission } from "./presentation";
 import { GitHubPanel } from "./github-panel";
-import { askCopilot } from "./copilot";
+import { askCopilot, requestTimeoutMs } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
 import { join } from "node:path";
 
@@ -54,12 +54,20 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
     const configuration = vscode.workspace.getConfiguration("arrangedAgents");
+    const requestTimeout = (): number =>
+      requestTimeoutMs(
+        vscode.workspace
+          .getConfiguration("arrangedAgents")
+          .get("requestTimeoutMinutes"),
+      );
     const storage = new ApplicationStorage(
       context.globalStorageUri.fsPath,
       root.fsPath,
     );
     const saved = await storage.load();
     let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let publishTimer: ReturnType<typeof setTimeout> | undefined;
+    const renderer = new ConversationRenderer();
     let stopping = false;
     let stopped: Promise<void> | undefined;
     const github = new GitHubPanel((update) => {
@@ -78,6 +86,11 @@ export function activate(context: vscode.ExtensionContext): void {
         }, 300);
       }
     };
+    const schedulePublish = (): void => {
+      if (!publishTimer && !stopping) {
+        publishTimer = setTimeout(publish, 30);
+      }
+    };
     const application: AgentApplication = new AgentApplication(
       root.fsPath,
       (repository, requestId) =>
@@ -85,6 +98,9 @@ export function activate(context: vscode.ExtensionContext): void {
           cliPath: configuration.get<string>("cliPath", "copilot"),
           model: configuration.get<string>("model", "").trim(),
           workingDirectory: repository.path,
+          get timeoutMs() {
+            return requestTimeout();
+          },
           onPermissionRequest: async (request, invocation) => {
             if (!vscode.workspace.isTrusted || !panel) {
               return {
@@ -111,8 +127,9 @@ export function activate(context: vscode.ExtensionContext): void {
             return application.askQuestion(repository.id, request, requestId);
           },
         }),
-      () => {
-        publish();
+      (streaming) => {
+        if (streaming) schedulePublish();
+        else publish();
         scheduleSave();
       },
       saved,
@@ -121,6 +138,7 @@ export function activate(context: vscode.ExtensionContext): void {
       (stopped ??= (async () => {
         stopping = true;
         clearTimeout(saveTimer);
+        clearTimeout(publishTimer);
         try {
           await Promise.all([application.dispose(), github.dispose()]);
         } finally {
@@ -129,7 +147,9 @@ export function activate(context: vscode.ExtensionContext): void {
       })());
     let panel: vscode.WebviewPanel | undefined;
     const publish = (): void => {
-      if (!panel) {
+      clearTimeout(publishTimer);
+      publishTimer = undefined;
+      if (!panel || stopping) {
         return;
       }
       const state = application.getState();
@@ -137,13 +157,7 @@ export function activate(context: vscode.ExtensionContext): void {
         type: "state",
         state: {
           ...state,
-          messages: state.messages.map((message) => ({
-            ...message,
-            html:
-              message.role === "assistant" || message.role === "reasoning"
-                ? renderMarkdown(message.content)
-                : renderText(message.content),
-          })),
+          messages: renderer.render(state.activeId, state.messages),
         },
       });
     };
@@ -184,6 +198,12 @@ export function activate(context: vscode.ExtensionContext): void {
             case "ready":
               publish();
               break;
+            case "settings":
+              await vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "@ext:xadupre.arranged-agents",
+              );
+              break;
             case "refresh":
               await application.refresh();
               github.retain(
@@ -223,6 +243,7 @@ export function activate(context: vscode.ExtensionContext): void {
                       model: configuration.get<string>("model", "").trim(),
                       workingDirectory: source.repository.path,
                       signal,
+                      timeoutMs: requestTimeout(),
                       analysisOnly: true,
                       responseSchema: postMortemResponseSchema,
                     }),

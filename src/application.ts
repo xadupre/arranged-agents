@@ -96,7 +96,7 @@ interface RepositorySession {
 }
 
 export type ApplicationMessage =
-  | { type: "ready" | "refresh" }
+  | { type: "ready" | "refresh" | "settings" }
   | { type: "github"; id: string; section: GitHubSection; cursor?: string }
   | {
       type:
@@ -121,7 +121,11 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (!value || typeof value !== "object" || !("type" in value)) {
     throw new Error("Invalid application message.");
   }
-  if (value.type === "ready" || value.type === "refresh") {
+  if (
+    value.type === "ready" ||
+    value.type === "refresh" ||
+    value.type === "settings"
+  ) {
     return { type: value.type };
   }
   if (value.type === "openExternal") {
@@ -242,7 +246,7 @@ export class AgentApplication {
       repository: Repository,
       requestId?: string,
     ) => Conversation,
-    private readonly onChange: () => void,
+    private readonly onChange: (streaming?: boolean) => void,
     saved?: SavedApplication,
   ) {
     if (saved && saved.root !== root) {
@@ -1342,13 +1346,13 @@ export class AgentApplication {
             event.data.partialOutput,
             false,
           );
-          this.onChange();
+          this.onChange(true);
           return;
         }
         push(message);
       }
     }
-    this.onChange();
+    this.onChange(true);
   }
 
   private assertOpen(): void {

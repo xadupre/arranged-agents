@@ -220,6 +220,18 @@ individual comments also newest-first. Commits use their displayed author date.
 Configuration and remote workspaces
 -----------------------------------
 
+Click **Settings** at the top right of the conversation to open the Arranged
+Agents settings page in VS Code. No repository session needs to be started.
+VS Code persists the selected user or workspace settings.
+
+``arrangedAgents.requestTimeoutMinutes`` sets the maximum total duration of a
+Copilot operation, with a default of **60 minutes (one hour)**. It includes model
+generation, tool execution, permission/question waits and crash recovery delays;
+activity does not reset the deadline. The setting applies to main and parallel
+agents and each PostMortem analysis request. Positive whole minutes are required.
+Changes affect subsequent operations, including in sessions already open; an
+operation in progress retains its original deadline. **Cancel** remains available.
+
 Set ``arrangedAgents.cliPath`` to the absolute path of your CLI if it cannot be
 found on ``PATH``. This is a machine-scoped setting. Optionally select a model
 with ``arrangedAgents.model``; an empty value uses the CLI default.

@@ -54,6 +54,13 @@
           "type": "string",
           "default": "",
           "description": "Copilot model ID. Empty uses the CLI default."
+        },
+        "arrangedAgents.requestTimeoutMinutes": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 1,
+          "maximum": 35791,
+          "description": "Maximum total duration of a Copilot operation in minutes, including tools and permission waits. Changes apply to subsequent operations, including in existing sessions."
         }
       }
     }
