@@ -1697,6 +1697,33 @@ test("Session / events also hides raw event details without hiding tools or outp
   );
 });
 
+test("URL root consent is clearly labeled and sent as an explicit approval", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  state.permissions = [
+    {
+      id: "url-read",
+      repositoryId: "alpha",
+      kind: "url",
+      summary: "Access this URL?",
+      content: "https://example.com/docs",
+      details: "{}",
+      approvalLabel: "Allow https://example.com and remember",
+    },
+  ];
+  publish(state);
+  const allow = document.querySelector<HTMLButtonElement>(
+    "#permissions button",
+  );
+  assert.ok(allow);
+  assert.equal(allow.textContent, "Allow https://example.com and remember");
+  allow.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "permission",
+    id: "url-read",
+    approve: true,
+  });
+});
+
 test("inline permission controls remain visible across filters and repository changes without grabbing focus", async (t) => {
   const { document, posted, publish, state } = await setup(t);
   state.repositories[0]!.status = "ready";

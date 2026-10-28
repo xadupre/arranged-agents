@@ -55,6 +55,15 @@
           "default": "",
           "description": "Copilot model ID. Empty uses the CLI default."
         },
+        "arrangedAgents.approvedUrlOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "scope": "machine",
+          "description": "Remembered URL roots approved for reading (scheme, hostname and optional port, for example https://example.com). Applies across repositories. Remove an entry to require approval again. HTTPS GitHub file reads are automatically approved."
+        },
         "arrangedAgents.requestTimeoutMinutes": {
           "type": "integer",
           "default": 60,

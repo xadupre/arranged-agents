@@ -9,6 +9,7 @@ import {
   type CopilotOptions,
 } from "../src/copilot";
 import { CopilotConversation } from "../src/conversation";
+import { permissionHandler } from "../src/permissions";
 import { waitForRequest } from "./helpers";
 import {
   generatePostMortem,
@@ -188,6 +189,22 @@ test("resolves the CLI through PATH and preserves repository tools, Git context 
   assert.ok(send);
   assert.equal(send.params.prompt, "Question only");
   assert.equal(send.params.attachments, undefined);
+  await assertStopped(options);
+});
+
+test("the permission policy automatically answers file reads through the real SDK", async (t) => {
+  const options = await setup(t, "permission");
+  const answer = await askCopilot("Read the repository", {
+    ...options,
+    onPermissionRequest: permissionHandler({
+      isActive: () => true,
+      approvedOrigins: () => [],
+      rememberOrigin: async () =>
+        assert.fail("File reads must not save URL consent"),
+      ask: async () => assert.fail("File reads must not prompt the user"),
+    }),
+  });
+  assert.equal(answer, "Repository access approved");
   await assertStopped(options);
 });
 
