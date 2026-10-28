@@ -1469,6 +1469,9 @@ test("startup process crashes are retried but authentication errors are not", as
 
 test("unknown paths and malformed UI messages cannot start sessions", async (t) => {
   const { application, root } = await setup(t);
+  assert.deepEqual(parseApplicationMessage({ type: "settings" }), {
+    type: "settings",
+  });
   await assert.rejects(
     application.select(join(root, "alpha", "..")),
     /Unknown repository/,

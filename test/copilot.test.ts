@@ -3,7 +3,12 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { askCopilot, type CopilotOptions } from "../src/copilot";
+import {
+  askCopilot,
+  requestTimeoutMs,
+  type CopilotOptions,
+} from "../src/copilot";
+import { CopilotConversation } from "../src/conversation";
 import { waitForRequest } from "./helpers";
 import {
   generatePostMortem,
@@ -28,6 +33,39 @@ async function assertStopped(options: CopilotOptions): Promise<void> {
   );
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
+
+test("request timeout settings default to one hour and reject invalid or overflowing timers", () => {
+  assert.equal(requestTimeoutMs(), 3_600_000);
+  assert.equal(requestTimeoutMs(1), 60_000);
+  assert.equal(requestTimeoutMs(90), 5_400_000);
+  assert.equal(requestTimeoutMs(35791), 2_147_460_000);
+  for (const value of [0, -1, 1.5, 35792, NaN, Infinity, "60", null, true]) {
+    assert.throws(() => requestTimeoutMs(value), /requestTimeoutMinutes/);
+  }
+});
+
+test("an open conversation reads the updated timeout once for each operation", async (t) => {
+  const options = await setup(t, "hang:session.sendAndWait");
+  let timeoutMs = 10_000;
+  let reads = 0;
+  const conversation = new CopilotConversation({
+    ...options,
+    get timeoutMs() {
+      reads++;
+      return timeoutMs;
+    },
+  });
+  t.after(() => conversation.dispose());
+  const signal = new AbortController().signal;
+  await conversation.start(signal);
+  timeoutMs = 75;
+  await assert.rejects(
+    conversation.send("Use the new deadline", signal),
+    /timed out after 75ms/,
+  );
+  assert.equal(reads, 2);
+  await assertStopped(options);
+});
 
 test("PostMortem analysis uses a real isolated SDK client without tools or discovery and deletes its completed session", async (t) => {
   const options = await setup(t, "postmortem");

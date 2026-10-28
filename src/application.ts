@@ -96,7 +96,7 @@ interface RepositorySession {
 }
 
 export type ApplicationMessage =
-  | { type: "ready" | "refresh" }
+  | { type: "ready" | "refresh" | "settings" }
   | { type: "github"; id: string; section: GitHubSection; cursor?: string }
   | {
       type:
@@ -121,7 +121,11 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (!value || typeof value !== "object" || !("type" in value)) {
     throw new Error("Invalid application message.");
   }
-  if (value.type === "ready" || value.type === "refresh") {
+  if (
+    value.type === "ready" ||
+    value.type === "refresh" ||
+    value.type === "settings"
+  ) {
     return { type: value.type };
   }
   if (value.type === "openExternal") {

@@ -386,7 +386,7 @@ test("the compact conversation heading groups its title, session status and Post
   assert.ok(heading);
   assert.deepEqual(
     [...heading.children].map((element) => element.id || element.className),
-    ["active-repository", "session-activity", "postmortem"],
+    ["active-repository", "session-activity", "postmortem", "settings"],
   );
   assert.equal(
     heading.querySelector("#active-repository")?.textContent,
@@ -397,6 +397,20 @@ test("the compact conversation heading groups its title, session status and Post
     /Session closed/,
   );
   assert.equal(document.querySelector(".chat-header h1"), null);
+});
+
+test("Settings opens without selecting a repository and remains available during work", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  const button = document.querySelector<HTMLButtonElement>("#settings");
+  assert.ok(button);
+  button.click();
+  assert.deepEqual(posted.at(-1), { type: "settings" });
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "busy";
+  publish(state);
+  assert.equal(button.disabled, false);
+  button.click();
+  assert.deepEqual(posted.at(-1), { type: "settings" });
 });
 
 test("PostMortem renders a safe evidence-linked table independently of transcript filters and exports its JSON", async (t) => {

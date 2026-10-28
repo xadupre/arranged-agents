@@ -5,7 +5,7 @@ import { renderApplication, renderMarkdown, renderText } from "./render";
 import { ApplicationStorage } from "./storage";
 import { describePermission } from "./presentation";
 import { GitHubPanel } from "./github-panel";
-import { askCopilot } from "./copilot";
+import { askCopilot, requestTimeoutMs } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
 import { join } from "node:path";
 
@@ -54,6 +54,12 @@ export function activate(context: vscode.ExtensionContext): void {
       );
     }
     const configuration = vscode.workspace.getConfiguration("arrangedAgents");
+    const requestTimeout = (): number =>
+      requestTimeoutMs(
+        vscode.workspace
+          .getConfiguration("arrangedAgents")
+          .get("requestTimeoutMinutes"),
+      );
     const storage = new ApplicationStorage(
       context.globalStorageUri.fsPath,
       root.fsPath,
@@ -85,6 +91,9 @@ export function activate(context: vscode.ExtensionContext): void {
           cliPath: configuration.get<string>("cliPath", "copilot"),
           model: configuration.get<string>("model", "").trim(),
           workingDirectory: repository.path,
+          get timeoutMs() {
+            return requestTimeout();
+          },
           onPermissionRequest: async (request, invocation) => {
             if (!vscode.workspace.isTrusted || !panel) {
               return {
@@ -184,6 +193,12 @@ export function activate(context: vscode.ExtensionContext): void {
             case "ready":
               publish();
               break;
+            case "settings":
+              await vscode.commands.executeCommand(
+                "workbench.action.openSettings",
+                "@ext:xadupre.arranged-agents",
+              );
+              break;
             case "refresh":
               await application.refresh();
               github.retain(
@@ -223,6 +238,7 @@ export function activate(context: vscode.ExtensionContext): void {
                       model: configuration.get<string>("model", "").trim(),
                       workingDirectory: source.repository.path,
                       signal,
+                      timeoutMs: requestTimeout(),
                       analysisOnly: true,
                       responseSchema: postMortemResponseSchema,
                     }),

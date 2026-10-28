@@ -29,6 +29,9 @@ declare function acquireVsCodeApi(): {
   const send = element("send", HTMLButtonElement);
   const parallel = element("parallel", HTMLButtonElement);
   const postMortem = element("postmortem", HTMLButtonElement);
+  element("settings", HTMLButtonElement).addEventListener("click", () => {
+    vscode.postMessage({ type: "settings" });
+  });
   const exportPostMortem = element("export-postmortem", HTMLButtonElement);
   let postMortemRenderedKey: string | undefined;
   const cancel = element("cancel", HTMLButtonElement);

@@ -13,7 +13,8 @@ Current features
 * Group active repository sessions in the first box, above other repositories.
 * Preserve independent conversation histories and drafts while switching repositories.
 * Render Markdown and inline/display LaTeX equations as HTML with native MathML.
-* Choose the CLI executable and model through VS Code settings.
+* Open the Settings page to choose the CLI executable, model and request timeout
+  (one hour by default).
 * Cancel a request and report visible CLI/model errors.
 * Send independent parallel questions/actions while tools run, enabled by default.
 * Switch Parallel OFF to queue messages for the main agent after current work.
