@@ -13,6 +13,26 @@ export type UserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
 export type UserInputRequest = Parameters<UserInputHandler>[0];
 export type UserInputResponse = Awaited<ReturnType<UserInputHandler>>;
 
+export const DEFAULT_REQUEST_TIMEOUT_MS = 3_600_000;
+
+export function requestTimeoutMs(
+  minutes: unknown = DEFAULT_REQUEST_TIMEOUT_MS / 60_000,
+): number {
+  // Node clamps delays beyond its signed 32-bit timer limit to 1 ms.
+  const maximum = Math.floor(2_147_483_647 / 60_000);
+  if (
+    typeof minutes !== "number" ||
+    !Number.isSafeInteger(minutes) ||
+    minutes < 1 ||
+    minutes > maximum
+  ) {
+    throw new Error(
+      `Set arrangedAgents.requestTimeoutMinutes to a whole number between 1 and ${maximum}.`,
+    );
+  }
+  return minutes * 60_000;
+}
+
 export interface CopilotOptions {
   cliPath: string;
   workingDirectory: string;
@@ -140,7 +160,7 @@ export async function askCopilot(
   options.signal?.throwIfAborted();
   const client = await createCopilotClient(options);
   options.signal?.throwIfAborted();
-  const timeoutMs = options.timeoutMs ?? 120_000;
+  const timeoutMs = options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
   if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
     throw new Error("The Copilot request timeout must be a positive number.");
   }

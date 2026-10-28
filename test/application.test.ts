@@ -50,6 +50,7 @@ async function setup(
   }
   let changes = 0;
   const snapshots: ApplicationState[] = [];
+  const streamingChanges: boolean[] = [];
   const updates = new EventEmitter();
   const applications: AgentApplication[] = [];
   const createApplication = (saved?: SavedApplication): AgentApplication => {
@@ -72,8 +73,9 @@ async function setup(
           onUserInputRequest: (request) =>
             application.askQuestion(repository.id, request, requestId),
         }),
-      () => {
+      (streaming = false) => {
         changes++;
+        streamingChanges.push(streaming);
         snapshots.push(application.getState());
         updates.emit("change");
       },
@@ -93,6 +95,7 @@ async function setup(
     root,
     changes: () => changes,
     snapshots,
+    streamingChanges,
     createApplication,
     waitForRecovery: async () => {
       const signal = AbortSignal.timeout(10_000);
@@ -1075,12 +1078,24 @@ test("a missing saved SDK session is reported and only an explicit restart start
 });
 
 test("SDK events stream commands, separate output channels, reasoning and messages without duplicate final answers", async (t) => {
-  const { application, root, snapshots } = await setup(t, "events");
+  const { application, root, snapshots, streamingChanges } = await setup(
+    t,
+    "events",
+  );
   const alpha = join(root, "alpha");
   const beta = join(root, "beta");
   await application.select(alpha);
   assert.equal(application.getState().messages[0]?.title, "session.start");
   await application.send(alpha, "Show everything");
+  assert.ok(streamingChanges.includes(true));
+  const firstBusy = snapshots.findIndex((snapshot) =>
+    snapshot.repositories.some(
+      (repository) => repository.id === alpha && repository.status === "busy",
+    ),
+  );
+  assert.notEqual(firstBusy, -1);
+  assert.equal(streamingChanges[firstBusy], false);
+  assert.equal(streamingChanges.at(-1), false);
   const transcript = application.getState().messages;
   const fragments = transcript.filter(
     (message) => message.title === `Tool input: bash`,
@@ -1469,6 +1484,9 @@ test("startup process crashes are retried but authentication errors are not", as
 
 test("unknown paths and malformed UI messages cannot start sessions", async (t) => {
   const { application, root } = await setup(t);
+  assert.deepEqual(parseApplicationMessage({ type: "settings" }), {
+    type: "settings",
+  });
   await assert.rejects(
     application.select(join(root, "alpha", "..")),
     /Unknown repository/,

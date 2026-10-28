@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import math from "@vscode/markdown-it-katex";
 import { isExternalUrl } from "./links";
+import type { ChatMessage } from "./application";
 
 const markdown = new MarkdownIt({ html: false, linkify: true });
 markdown.use(math, {
@@ -47,6 +48,46 @@ export function renderText(content: string): string {
   return html + escape(content.slice(offset));
 }
 
+export class ConversationRenderer {
+  private activeId?: string;
+  private cached: {
+    role: ChatMessage["role"];
+    content: string;
+    html: string;
+  }[] = [];
+
+  render(
+    activeId: string | undefined,
+    messages: readonly ChatMessage[],
+  ): (ChatMessage & { html: string })[] {
+    if (this.activeId !== activeId) {
+      this.cached = [];
+      this.activeId = activeId;
+    }
+    const rendered = messages.map((message, index) => {
+      let cached = this.cached[index];
+      if (
+        !cached ||
+        cached.role !== message.role ||
+        cached.content !== message.content
+      ) {
+        cached = {
+          role: message.role,
+          content: message.content,
+          html:
+            message.role === "assistant" || message.role === "reasoning"
+              ? renderMarkdown(message.content)
+              : renderText(message.content),
+        };
+        this.cached[index] = cached;
+      }
+      return { ...message, html: cached.html };
+    });
+    this.cached.length = messages.length;
+    return rendered;
+  }
+}
+
 export function renderApplication(resources: {
   cspSource: string;
   scriptUri: string;
@@ -89,6 +130,7 @@ export function renderApplication(resources: {
         <h2 id="active-repository">Select a repository on the right</h2>
         <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
         <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
+        <button id="settings" type="button" title="Open Arranged Agents settings">Settings</button>
       </div>
       <fieldset id="information-filters">
         <legend>Show information</legend>

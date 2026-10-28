@@ -386,7 +386,7 @@ test("the compact conversation heading groups its title, session status and Post
   assert.ok(heading);
   assert.deepEqual(
     [...heading.children].map((element) => element.id || element.className),
-    ["active-repository", "session-activity", "postmortem"],
+    ["active-repository", "session-activity", "postmortem", "settings"],
   );
   assert.equal(
     heading.querySelector("#active-repository")?.textContent,
@@ -397,6 +397,99 @@ test("the compact conversation heading groups its title, session status and Post
     /Session closed/,
   );
   assert.equal(document.querySelector(".chat-header h1"), null);
+});
+
+test("Settings opens without selecting a repository and remains available during work", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  const button = document.querySelector<HTMLButtonElement>("#settings");
+  assert.ok(button);
+  button.click();
+  assert.deepEqual(posted.at(-1), { type: "settings" });
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "busy";
+  publish(state);
+  assert.equal(button.disabled, false);
+  button.click();
+  assert.deepEqual(posted.at(-1), { type: "settings" });
+});
+
+test("streaming changes only the affected message and preserves repository controls and expanded evidence", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "busy";
+  state.messages = [
+    {
+      role: "tool",
+      content: "npm test",
+      title: "bash - running",
+      details: "Recorded command",
+    },
+    { role: "assistant", content: "Answer" },
+  ];
+  publish(state);
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="system"]',
+    )
+    ?.click();
+  const first = document.querySelector<HTMLElement>("#messages article");
+  const repository = document.querySelector(".repository");
+  const details = first?.querySelector("details");
+  assert.ok(first && details);
+  details.open = true;
+  for (let index = 0; index < 20; index++) {
+    state.messages[1]!.content += ".";
+    publish(state);
+  }
+  assert.equal(document.querySelector("#messages article"), first);
+  assert.equal(document.querySelector(".repository"), repository);
+  assert.equal(first.querySelector("details"), details);
+  assert.equal(details.open, true);
+  assert.match(
+    document.querySelector("#messages article:last-child")?.textContent ?? "",
+    /Answer\.{20}/,
+  );
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="tools"]',
+    )
+    ?.click();
+  assert.equal(document.querySelector("#messages article"), first);
+  assert.equal(first.hidden, true);
+  state.messages[0]!.title = "bash - failed";
+  state.messages[0]!.error = true;
+  state.messages[0]!.details = "Updated evidence";
+  publish(state);
+  const updated = document.querySelector<HTMLElement>("#messages article");
+  assert.notEqual(updated, first);
+  assert.equal(updated?.hidden, false);
+  assert.equal(updated?.querySelector("details")?.open, true);
+  assert.match(
+    updated?.querySelector("details")?.textContent ?? "",
+    /Updated evidence/,
+  );
+  state.messages.pop();
+  publish(state);
+  assert.equal(document.querySelectorAll("#messages article").length, 1);
+  state.repositories[0]!.generation = 1;
+  publish(state);
+  assert.notEqual(document.querySelector("#messages article"), updated);
+  assert.equal(
+    document.querySelector("#messages details")?.hasAttribute("open"),
+    false,
+  );
+  state.activeId = "beta";
+  state.messages = [{ role: "assistant", content: "Independent conversation" }];
+  publish(state);
+  assert.equal(document.querySelectorAll("#messages article").length, 1);
+  assert.match(
+    document.getElementById("messages")?.textContent ?? "",
+    /Independent conversation/,
+  );
+  assert.doesNotMatch(
+    document.getElementById("messages")?.textContent ?? "",
+    /Updated evidence/,
+  );
 });
 
 test("PostMortem renders a safe evidence-linked table independently of transcript filters and exports its JSON", async (t) => {

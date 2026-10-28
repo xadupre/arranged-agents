@@ -1,7 +1,43 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { renderMarkdown, renderResult, renderText } from "../src/render";
+import {
+  ConversationRenderer,
+  renderMarkdown,
+  renderResult,
+  renderText,
+} from "../src/render";
 import { describePermission, describeTool } from "../src/presentation";
+import type { ChatMessage } from "../src/application";
+
+test("cached conversation HTML follows edited content and roles while retaining fresh metadata and avoiding stale session entries", () => {
+  const renderer = new ConversationRenderer();
+  const messages: ChatMessage[] = [
+    { role: "assistant", content: "**Answer**", title: "Draft" },
+    { role: "tool", content: "npm test", details: "Pending" },
+  ];
+  const before = renderer.render("alpha", messages);
+  messages[0]!.title = "Final";
+  messages[1]!.details = "Completed";
+  const metadata = renderer.render("alpha", messages);
+  assert.equal(metadata[0]?.html, before[0]?.html);
+  assert.equal(metadata[0]?.title, "Final");
+  assert.equal(metadata[1]?.details, "Completed");
+  messages[0]!.role = "tool";
+  assert.equal(renderer.render("alpha", messages)[0]?.html, "**Answer**");
+  messages[0]!.content = "<script>not executable</script>";
+  assert.doesNotMatch(renderer.render("alpha", messages)[0]!.html, /<script>/);
+  assert.equal(renderer.render("alpha", []).length, 0);
+  assert.deepEqual(
+    renderer.render("beta", [{ role: "assistant", content: "New session" }]),
+    [
+      {
+        role: "assistant",
+        content: "New session",
+        html: renderMarkdown("New session"),
+      },
+    ],
+  );
+});
 
 test("tool and approval summaries show readable commands, paths and warnings without JSON", () => {
   assert.equal(

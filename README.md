@@ -129,6 +129,11 @@ GitHub operations use the CLI's existing authentication.
 Equations use `$x^2$` inline or `$$E=mc^2$$` on their own line. KaTeX renders
 native MathML without loading external fonts or scripts.
 
+Click **Settings** at the top right to open the Arranged Agents settings page in
+VS Code. `arrangedAgents.requestTimeoutMinutes` defaults to **60 minutes** and
+limits total operation time, including tools and permission waits. Changes apply
+to subsequent operations, even in existing sessions.
+
 If VS Code cannot find `copilot`, set `arrangedAgents.cliPath` to its absolute
 executable path. Optionally set `arrangedAgents.model` to a supported model ID.
 In Remote SSH, WSL, or a dev container, the CLI must be installed and authenticated

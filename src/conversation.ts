@@ -10,6 +10,7 @@ import type {
 import {
   copilotSessionConfig,
   createCopilotClient,
+  DEFAULT_REQUEST_TIMEOUT_MS,
   type CopilotOptions,
 } from "./copilot";
 
@@ -117,7 +118,7 @@ export class CopilotConversation implements Conversation {
     }
     this.busy = true;
     try {
-      return await this.run(async (operationSignal, recovering) => {
+      return await this.run(async (operationSignal, recovering, timeoutMs) => {
         if (recovering) await this.connect(operationSignal);
         operationSignal.throwIfAborted();
         const session = this.session;
@@ -136,7 +137,7 @@ export class CopilotConversation implements Conversation {
                 ].join("\n")
               : prompt,
           },
-          this.options.timeoutMs ?? 120_000,
+          timeoutMs,
         );
         if (!response?.data.content.trim()) {
           throw new Error("Copilot returned no answer.");
@@ -175,7 +176,11 @@ export class CopilotConversation implements Conversation {
   }
 
   private async run<T>(
-    action: (signal: AbortSignal, recovering: boolean) => Promise<T>,
+    action: (
+      signal: AbortSignal,
+      recovering: boolean,
+      timeoutMs: number,
+    ) => Promise<T>,
     callerSignal: AbortSignal,
     allowRecovery = true,
   ): Promise<T> {
@@ -183,7 +188,7 @@ export class CopilotConversation implements Conversation {
       throw new Error("This Copilot session has ended.");
     }
     callerSignal.throwIfAborted();
-    const timeoutMs = this.options.timeoutMs ?? 120_000;
+    const timeoutMs = this.options.timeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     const deadline = new AbortController();
     const signal = AbortSignal.any([
       callerSignal,
@@ -208,7 +213,7 @@ export class CopilotConversation implements Conversation {
         for (let attempt = 0; ; attempt++) {
           signal.throwIfAborted();
           try {
-            return await action(signal, attempt > 0);
+            return await action(signal, attempt > 0, timeoutMs);
           } catch (error) {
             signal.throwIfAborted();
             if (!allowRecovery || !isConnectionFailure(error)) {
