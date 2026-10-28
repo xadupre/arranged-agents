@@ -7,18 +7,22 @@ Current features
 * Open a three-panel editor tab: empty left panel, chat center and repositories right.
 * Discover immediate child directories containing ``.git``, including worktrees.
 * Start each repository's session lazily when clicked.
+* Group active repository sessions in the first box, above other repositories.
 * Preserve independent conversation histories and drafts while switching repositories.
 * Render Markdown and inline/display LaTeX equations as HTML with native MathML.
 * Choose the CLI executable and model through VS Code settings.
 * Cancel a request and report visible CLI/model errors.
 * Reject concurrent requests within the same repository without blocking other sessions.
 * Show activity icons during startup and generation, including background sessions.
+* Distinguish open sessions with a tinted repository background and solid indicator;
+  active work uses a different tint and spinner, independently of selection.
 * Resize panels by dragging their dividers or using the left/right arrow keys.
 * Inspect repository files and use Git/GitHub tools with explicit permission confirmation.
 * Send with Enter, insert new lines with Shift+Enter and open HTTP/HTTPS links.
 * Display live messages, commands, tool results, available reasoning and session events.
 * Toggle information categories above the chat without discarding history or affecting tools.
 * Save histories and drafts locally, stop on close and resume saved sessions lazily.
+* Right-click a repository to close, start fresh or delete its latest/all sessions.
 
 Messages are limited to 20,000 characters. The UI does not automatically include
 editor selections or file contents.
@@ -35,7 +39,10 @@ appended. Repository file hooks and cross-session store integration stay disable
 Built-in tools can read files, execute commands (including ``gh`` for pull
 requests) and edit files. Tool permission requests appear directly in the
 conversation panel with repository/operation details and **Allow once** / **Reject**
-choices. They do not open modal dialogs, issue notification sounds, take keyboard
+choices. Commands, paths, proposed changes and sandbox warnings are presented
+readably; raw JSON is available only through the technical-events filter.
+Copilot's questions use inline choice buttons and optional free-text answers,
+not JSON payloads. They do not open modal dialogs, issue notification sounds, take keyboard
 focus or disappear when display filters are unchecked. Requests from background
 repositories also remain visible. Cancellation or closure rejects pending requests;
 no automatic approval is granted. Relevant file/tool results may be sent to Copilot; normal CLI
@@ -50,10 +57,14 @@ Math rendering disables trusted TeX commands.
 Only packaged UI resources are available, without remote fonts or scripts.
 
 The log displays events and readable reasoning supplied by the CLI; it cannot
-expose reasoning or tool information that the CLI does not emit. Raw tool event
+expose reasoning or tool information that the CLI does not emit. Only messages
+and concise tool summaries are enabled by default. Tool input deltas are grouped
+as technical events; raw fragments in older saved histories are also hidden by
+default. Reasoning, output, technical events and timestamps are
+opt-in, while errors remain visible. Raw tool event
 metadata is available under **Event details**, also hidden by the
 **Session / events** filter. Visibility filters only affect
-display, not execution, permissions or retained conversation context.
+display, not execution, permissions, pending questions or retained conversation context.
 
 Workspace Trust is required. The CLI's normal session persistence and GitHub's
 service-side policies still apply; disabling session-store integration is not a
@@ -84,6 +95,25 @@ storage with atomic, serialized writes. On POSIX, the directory is private and
 files use mode 0600. These files contain plaintext conversations, tool output and
 drafts; they are not encrypted, synced or included in the repository. Damaged or
 unsupported snapshots fail visibly instead of being silently discarded.
+
+Repository session menu
+-----------------------
+
+Right-click a repository, or focus it and press Shift+F10, for these actions:
+
+* **Close session** stops its CLI without deleting history or resumable context.
+* **New session** archives the current conversation and starts a blank session.
+* **Delete latest session** permanently deletes the current conversation and
+  restores the previous archived conversation, if any, without starting Copilot.
+* **Delete all sessions for this repository** deletes its current and archived
+  conversations managed by Arranged Agents.
+
+Deletion requires inline confirmation, not a modal popup. It removes both local
+application history and the corresponding saved Copilot sessions through the
+official SDK API. Other repositories, unrelated Copilot sessions and repository
+files are not affected. If deletion fails midway, successfully deleted histories
+stay deleted, while remaining histories are retained with a visible error for retry.
+Session-management actions flush the saved snapshot immediately.
 
 Known limitations
 -----------------

@@ -3,6 +3,7 @@ import { AgentApplication, parseApplicationMessage } from "./application";
 import { CopilotConversation } from "./conversation";
 import { renderApplication, renderMarkdown, renderText } from "./render";
 import { ApplicationStorage } from "./storage";
+import { describePermission } from "./presentation";
 
 let activePanel: vscode.WebviewPanel | undefined;
 let closeActiveApplication: (() => Promise<void>) | undefined;
@@ -86,8 +87,7 @@ export function activate(context: vscode.ExtensionContext): void {
             }
             const approved = await application.requestPermission(
               repository.id,
-              request.kind,
-              JSON.stringify(invocation.promptRequest ?? request, null, 2),
+              describePermission(request, invocation.promptRequest),
             );
             return approved && panel && vscode.workspace.isTrusted
               ? { kind: "approve-once" }
@@ -95,6 +95,12 @@ export function activate(context: vscode.ExtensionContext): void {
                   kind: "reject",
                   feedback: "The user did not approve this operation.",
                 };
+          },
+          onUserInputRequest: (request) => {
+            if (!vscode.workspace.isTrusted || !panel) {
+              throw new Error("The application is closed or untrusted.");
+            }
+            return application.askQuestion(repository.id, request);
           },
         }),
       () => {
@@ -188,8 +194,30 @@ export function activate(context: vscode.ExtensionContext): void {
             case "permission":
               application.respondToPermission(message.id, message.approve);
               break;
+            case "answer":
+              application.answerQuestion(message.id, message.answer);
+              break;
             case "restart":
               await application.restart(message.id);
+              break;
+            case "close-session":
+              await application
+                .closeSession(message.id)
+                .finally(() => storage.save(application.getSnapshot()));
+              break;
+            case "new-session":
+              await application
+                .newSession(message.id)
+                .finally(() => storage.save(application.getSnapshot()));
+              break;
+            case "delete-last-session":
+            case "delete-all-sessions":
+              await application
+                .deleteSessions(
+                  message.id,
+                  message.type === "delete-all-sessions",
+                )
+                .finally(() => storage.save(application.getSnapshot()));
               break;
             case "openExternal":
               if (

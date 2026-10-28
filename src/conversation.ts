@@ -19,6 +19,7 @@ export interface Conversation {
     sessionId?: string,
   ): Promise<void>;
   send(prompt: string, signal: AbortSignal): Promise<string>;
+  deleteSession(sessionId: string, signal: AbortSignal): Promise<void>;
   dispose(): Promise<void>;
 }
 
@@ -91,6 +92,22 @@ export class CopilotConversation implements Conversation {
     } finally {
       this.busy = false;
     }
+  }
+
+  deleteSession(sessionId: string, signal: AbortSignal): Promise<void> {
+    return this.run(async (operationSignal) => {
+      if (!this.client) {
+        const client = await createCopilotClient(this.options);
+        operationSignal.throwIfAborted();
+        this.client = client;
+        await client.start();
+      }
+      operationSignal.throwIfAborted();
+      if (await this.client.getSessionMetadata(sessionId)) {
+        operationSignal.throwIfAborted();
+        await this.client.deleteSession(sessionId);
+      }
+    }, signal);
   }
 
   dispose(): Promise<void> {

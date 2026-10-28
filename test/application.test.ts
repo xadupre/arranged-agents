@@ -12,6 +12,7 @@ import {
 import { CopilotConversation } from "../src/conversation";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
 import { waitForRequest } from "./helpers";
+import { describePermission } from "../src/presentation";
 
 async function setup(
   t: TestContext,
@@ -38,12 +39,13 @@ async function setup(
           onPermissionRequest: async (request, invocation) => ({
             kind: (await application.requestPermission(
               repository.id,
-              request.kind,
-              JSON.stringify(invocation.promptRequest ?? request, null, 2),
+              describePermission(request, invocation.promptRequest),
             ))
               ? "approve-once"
               : "reject",
           }),
+          onUserInputRequest: (request) =>
+            application.askQuestion(repository.id, request),
         }),
       () => {
         changes++;
@@ -78,10 +80,23 @@ async function setup(
         await once(updates, "change");
       }
     },
+    waitForQuestion: async (repositoryId: string) => {
+      for (;;) {
+        const request = application
+          .getState()
+          .questions.find((entry) => entry.repositoryId === repositoryId);
+        if (request) {
+          return request;
+        }
+        await once(updates, "change");
+      }
+    },
   };
 }
 
-async function requests(directory: string): Promise<{ method: string }[]> {
+async function requests(
+  directory: string,
+): Promise<{ method: string; params?: { sessionId?: string } }[]> {
   return (await readFile(join(directory, "requests.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -140,6 +155,8 @@ test("inline permissions wait for an explicit decision and stay isolated across 
   const alphaPermission = await waitForPermission(alpha);
   assert.equal(alphaPermission.kind, "read");
   assert.match(alphaPermission.details, /README.md/);
+  assert.equal(alphaPermission.content, "README.md");
+  assert.match(alphaPermission.summary, /Read this file/);
   assert.equal(
     (await requests(alpha)).filter(
       (request) =>
@@ -189,7 +206,16 @@ test("cancellation, closure, failure and repository removal clear pending approv
         action === "timeout" ? /timed out/ : { name: "AbortError" },
       );
       const request = await waitForPermission(alpha);
-      const extra = application.requestPermission(alpha, "shell", "echo test");
+      const extra = application.requestPermission(alpha, {
+        kind: "shell",
+        summary: "Run this command?",
+        content: "echo test",
+        details: "echo test",
+      });
+      const questionRejected = assert.rejects(
+        application.askQuestion(alpha, { question: "Pending question" }),
+        { name: "AbortError" },
+      );
       if (action === "cancel") {
         application.cancel(alpha);
       } else if (action === "close") {
@@ -199,14 +225,257 @@ test("cancellation, closure, failure and repository removal clear pending approv
         await application.refresh();
       }
       await rejected;
+      await questionRejected;
       assert.equal(await extra, false);
       assert.deepEqual(application.getState().permissions, []);
+      assert.deepEqual(application.getState().questions, []);
       assert.throws(
         () => application.respondToPermission(request.id, true),
         /closed|no longer pending/,
       );
     });
   }
+});
+
+test("SDK questions accept selected and freeform replies for the correct repository", async (t) => {
+  const { application, root, waitForQuestion } = await setup(t, "question");
+  const alpha = join(root, "alpha");
+  const beta = join(root, "beta");
+  await application.select(alpha);
+  const first = application.send(alpha, "Choose tests");
+  const question = await waitForQuestion(alpha);
+  assert.equal(question.question, "Which test suite should run?");
+  await application.select(beta);
+  application.answerQuestion(question.id, "Targeted");
+  await first;
+  assert.deepEqual(application.getState().questions, []);
+  await application.select(alpha);
+  assert.match(
+    application.getState().messages.at(-1)?.content ?? "",
+    /Targeted; freeform: false/,
+  );
+  assert.ok(
+    application
+      .getState()
+      .messages.some(
+        (message) => message.role === "user" && message.content === "Targeted",
+      ),
+  );
+  const second = application.send(alpha, "Custom answer");
+  const next = await waitForQuestion(alpha);
+  const restricted = application.askQuestion(alpha, {
+    question: "Choose only",
+    choices: ["One"],
+    allowFreeform: false,
+  });
+  const restrictedId = application.getState().questions.at(-1)!.id;
+  assert.throws(
+    () => application.answerQuestion(restrictedId, "Other"),
+    /proposed answers/,
+  );
+  application.answerQuestion(restrictedId, "One");
+  assert.deepEqual(await restricted, { answer: "One", wasFreeform: false });
+  application.answerQuestion(next.id, "Only changed files");
+  await second;
+  assert.match(
+    application.getState().messages.at(-1)?.content ?? "",
+    /Only changed files; freeform: true/,
+  );
+  assert.throws(
+    () => application.answerQuestion(next.id, "Again"),
+    /no longer pending/,
+  );
+  const third = application.send(alpha, "Cancel this question");
+  const rejected = assert.rejects(third, { name: "AbortError" });
+  await waitForQuestion(alpha);
+  application.cancel(alpha);
+  await rejected;
+  assert.deepEqual(application.getState().questions, []);
+});
+
+test("repository actions close lazily, archive fresh sessions and delete only that repository through the SDK", async (t) => {
+  const { application, root } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  const beta = join(root, "beta");
+  await application.select(alpha);
+  await application.send(alpha, "Remember FIRST");
+  application.setDraft(alpha, "First draft");
+  const firstId = application
+    .getSnapshot()
+    .sessions.find((entry) => entry.id === alpha)!.sessionId;
+  const originalPid = await pid(alpha);
+  await application.closeSession(alpha);
+  assert.throws(() => process.kill(originalPid, 0), { code: "ESRCH" });
+  assert.equal(application.getState().repositories[0]?.status, "saved");
+  assert.equal(application.getState().draft, "First draft");
+  await application.closeSession(beta);
+  await assert.rejects(readFile(join(beta, "pid")), { code: "ENOENT" });
+  await application.select(alpha);
+  await application.send(alpha, "Recall FIRST");
+  assert.match(
+    application.getState().messages.at(-1)?.content ?? "",
+    /Remember FIRST/,
+  );
+  await application.newSession(alpha);
+  assert.deepEqual(application.getState().messages, []);
+  assert.equal(application.getState().draft, "");
+  await application.send(alpha, "Remember SECOND");
+  application.setDraft(alpha, "Second draft");
+  const secondId = application
+    .getSnapshot()
+    .sessions.find((entry) => entry.id === alpha)!.sessionId;
+  await application.newSession(alpha);
+  await application.send(alpha, "Remember THIRD");
+  const thirdId = application
+    .getSnapshot()
+    .sessions.find((entry) => entry.id === alpha)!.sessionId;
+  assert.ok(firstId && secondId && thirdId);
+  assert.equal(new Set([firstId, secondId, thirdId]).size, 3);
+  assert.equal(application.getState().repositories[0]?.sessionCount, 3);
+  await application.select(beta);
+  await application.send(beta, "Do not touch BETA");
+  const betaPid = await pid(beta);
+  const betaSnapshot = application
+    .getSnapshot()
+    .sessions.find((entry) => entry.id === beta);
+  const resumesBefore = (await requests(alpha)).filter(
+    (entry) => entry.method === "session.resume",
+  ).length;
+  await application.deleteSessions(alpha, false);
+  assert.equal(application.getState().activeId, beta);
+  assert.equal(application.getState().repositories[0]?.status, "saved");
+  assert.equal(application.getState().repositories[0]?.sessionCount, 2);
+  assert.equal(
+    (await requests(alpha)).filter((entry) => entry.method === "session.resume")
+      .length,
+    resumesBefore,
+  );
+  assert.deepEqual(
+    application.getSnapshot().sessions.find((entry) => entry.id === beta),
+    betaSnapshot,
+  );
+  assert.doesNotThrow(() => process.kill(betaPid, 0));
+  await application.select(alpha);
+  assert.equal(application.getState().draft, "Second draft");
+  assert.match(application.getState().messages.at(-1)?.content ?? "", /SECOND/);
+  assert.doesNotMatch(
+    application.getState().messages.at(-1)?.content ?? "",
+    /FIRST|THIRD/,
+  );
+  await application.deleteSessions(alpha, true);
+  assert.deepEqual(application.getState().messages, []);
+  assert.equal(application.getState().draft, "");
+  assert.equal(application.getState().repositories[0]?.sessionCount, 0);
+  assert.equal(application.getState().repositories[0]?.status, "idle");
+  assert.deepEqual(
+    (await requests(alpha))
+      .filter((entry) => entry.method === "session.delete")
+      .map((entry) => entry.params?.sessionId),
+    [thirdId, secondId, firstId],
+  );
+  assert.equal(
+    (await requests(beta)).filter((entry) => entry.method === "session.delete")
+      .length,
+    0,
+  );
+  assert.deepEqual(
+    application.getSnapshot().sessions.find((entry) => entry.id === beta),
+    betaSnapshot,
+  );
+});
+
+test("archived histories persist and deletion failures retain remaining sessions for retry", async (t) => {
+  const { application, root, createApplication } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  await application.send(alpha, "Keep older");
+  const firstId = application.getSnapshot().sessions[0]!.sessionId;
+  assert.ok(firstId);
+  await application.newSession(alpha);
+  await application.send(alpha, "Delete newer");
+  await application.dispose();
+  const storage = new ApplicationStorage(join(root, "storage"), root);
+  await storage.save(application.getSnapshot());
+  const restored = createApplication(await storage.load());
+  await restored.refresh();
+  assert.equal(restored.getState().repositories[0]?.sessionCount, 2);
+  await writeFile(join(alpha, "fail-delete-id"), firstId);
+  await assert.rejects(restored.deleteSessions(alpha, true), /Deletion denied/);
+  assert.equal(restored.getState().repositories[0]?.sessionCount, 1);
+  assert.equal(restored.getSnapshot().sessions[0]?.sessionId, firstId);
+  assert.match(
+    restored.getState().messages.at(-1)?.content ?? "",
+    /Keep older/,
+  );
+  assert.match(restored.getState().error ?? "", /Deletion denied/);
+  await rm(join(alpha, "fail-delete-id"));
+  await restored.deleteSessions(alpha, true);
+  assert.equal(restored.getState().repositories[0]?.sessionCount, 0);
+  await storage.save(restored.getSnapshot());
+  const reopened = createApplication(await storage.load());
+  await reopened.refresh();
+  assert.equal(reopened.getState().repositories[0]?.sessionCount, 0);
+  assert.deepEqual(reopened.getState().messages, []);
+});
+
+test("deletion clears local history if the recorded SDK session is already absent", async (t) => {
+  const { application, root } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const sessionId = application.getSnapshot().sessions[0]?.sessionId;
+  assert.ok(sessionId);
+  await application.closeSession(alpha);
+  await rm(join(alpha, `history-${sessionId}.json`));
+  await application.deleteSessions(alpha, false);
+  assert.equal(application.getState().repositories[0]?.sessionCount, 0);
+  assert.equal(
+    (await requests(alpha)).filter((entry) => entry.method === "session.delete")
+      .length,
+    0,
+  );
+});
+
+test("shutdown while deletion closes the old client prevents a replacement CLI from starting", async (t) => {
+  const { application, root } = await setup(t, "persist");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const child = await pid(alpha);
+  const before = await requests(alpha);
+  const deleting = application.deleteSessions(alpha, true);
+  const rejected = assert.rejects(deleting, /closed/i);
+  await new Promise<void>((resolve) => queueMicrotask(resolve));
+  await application.dispose();
+  await rejected;
+  assert.deepEqual(await requests(alpha), before);
+  assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
+  assert.ok(application.getSnapshot().sessions[0]?.sessionId);
+});
+
+test("closing a busy repository keeps its resumable ID and deleting during shutdown is bounded", async (t) => {
+  const { application, root } = await setup(t, "persist-hang");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const sessionId = application.getSnapshot().sessions[0]?.sessionId;
+  const sending = application.send(alpha, "Interrupted request");
+  const interrupted = assert.rejects(sending, { name: "AbortError" });
+  await waitForRequest(alpha, "session.sendAndWait");
+  await application.closeSession(alpha);
+  await interrupted;
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+  assert.equal(application.getState().repositories[0]?.status, "saved");
+  assert.equal(application.getState().draft, "Interrupted request");
+  assert.equal(application.getState().repositories[0]?.generation, 1);
+  await writeFile(join(alpha, "scenario"), "hang:session.delete");
+  const deleting = application.deleteSessions(alpha, true);
+  const cancelled = assert.rejects(deleting, { name: "AbortError" });
+  await waitForRequest(alpha, "session.delete");
+  assert.throws(() => application.newSession(alpha), /already running/);
+  await assert.rejects(application.select(alpha), /already running/);
+  await application.dispose();
+  await cancelled;
+  assert.equal(application.getSnapshot().sessions[0]?.sessionId, sessionId);
+  const child = await pid(alpha);
+  assert.throws(() => process.kill(child, 0), { code: "ESRCH" });
 });
 
 test("closing and reopening restores histories, drafts and SDK context lazily for each repository", async (t) => {
@@ -362,6 +631,30 @@ test("SDK events stream commands, separate output channels, reasoning and messag
   assert.equal(application.getState().messages[0]?.title, "session.start");
   await application.send(alpha, "Show everything");
   const transcript = application.getState().messages;
+  const fragments = transcript.filter(
+    (message) => message.title === `Tool input: bash`,
+  );
+  assert.equal(fragments.length, 1);
+  assert.equal(fragments[0]?.role, "system");
+  assert.equal(fragments[0]?.content, '{"command":"gh pr list\\nprintf done"}');
+  assert.ok(
+    transcript.some(
+      (message) =>
+        message.title === "tool.execution_progress" &&
+        message.role === "system",
+    ),
+  );
+  assert.ok(
+    transcript.some(
+      (message) =>
+        message.role === "tool" && message.title === "bash - completed",
+    ),
+  );
+  assert.ok(
+    transcript.some(
+      (message) => message.error && message.content === "Command failed",
+    ),
+  );
   assert.equal(
     transcript.filter((message) => message.role === "user").length,
     1,
@@ -514,9 +807,22 @@ test("unknown paths and malformed UI messages cannot start sessions", async (t) 
     { type: "permission", id: "request", approve: "true" },
     { type: "permission", id: "request" },
     { type: "permission", id: 1, approve: true },
+    { type: "answer", id: "request", answer: "" },
+    { type: "answer", id: "request", answer: true },
+    { type: "answer", id: "request", answer: "x".repeat(20_001) },
+    { type: "delete-all-sessions", id: 1 },
+    { type: "delete-session", id: "alpha" },
   ]) {
     assert.throws(() => parseApplicationMessage(value));
   }
+  assert.deepEqual(
+    parseApplicationMessage({
+      type: "answer",
+      id: "question",
+      answer: "Targeted",
+    }),
+    { type: "answer", id: "question", answer: "Targeted" },
+  );
   assert.deepEqual(
     parseApplicationMessage({
       type: "permission",

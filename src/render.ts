@@ -75,14 +75,17 @@ export function renderApplication(resources: {
       <fieldset id="information-filters">
         <legend>Show information</legend>
         <label><input type="checkbox" value="messages" checked> Messages</label>
-        <label><input type="checkbox" value="reasoning" checked> Reasoning</label>
         <label><input type="checkbox" value="tools" checked> Commands / tools</label>
-        <label><input type="checkbox" value="output" checked> Output</label>
-        <label><input type="checkbox" value="system" checked> Session / events</label>
+        <label><input type="checkbox" value="reasoning"> Reasoning</label>
+        <label><input type="checkbox" value="output"> Output</label>
+        <label><input type="checkbox" value="system"> Session / events (JSON)</label>
       </fieldset>
     </header>
     <div id="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
-    <section id="permissions" aria-label="Tool permissions" hidden></section>
+    <div id="interactions">
+      <section id="permissions" aria-label="Tool permissions" hidden></section>
+      <section id="questions" aria-label="Questions from Copilot" hidden></section>
+    </div>
     <p id="error" role="alert" hidden></p>
     <form id="composer">
       <label for="question">Message to Copilot</label>
@@ -99,10 +102,20 @@ export function renderApplication(resources: {
   <aside id="repository-panel" aria-label="Repository sessions">
     <header><h2>Repositories</h2><button id="refresh" type="button">Refresh</button></header>
     <p id="root"></p>
-    <div id="repositories"></div>
+    <div id="repositories">
+      <section class="repository-group" aria-labelledby="started-repositories-title">
+        <h3 id="started-repositories-title">Active sessions</h3>
+        <div id="started-repositories"></div>
+      </section>
+      <section class="repository-group" aria-labelledby="other-repositories-title">
+        <h3 id="other-repositories-title">Other repositories</h3>
+        <div id="other-repositories"></div>
+      </section>
+    </div>
     <p class="repository-hint">Only direct child directories containing .git are listed. Click one to start its session.</p>
   </aside>
 </main>
+<div id="repository-menu" role="menu" aria-label="Repository session actions" hidden></div>
 <script nonce="${nonce}" src="${escape(resources.scriptUri)}"></script>
 </body>
 </html>`;

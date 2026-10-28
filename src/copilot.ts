@@ -9,6 +9,10 @@ import type {
   "resolution-mode": "import",
 };
 
+export type UserInputHandler = NonNullable<SessionConfig["onUserInputRequest"]>;
+export type UserInputRequest = Parameters<UserInputHandler>[0];
+export type UserInputResponse = Awaited<ReturnType<UserInputHandler>>;
+
 export interface CopilotOptions {
   cliPath: string;
   workingDirectory: string;
@@ -16,6 +20,7 @@ export interface CopilotOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
   onPermissionRequest?: PermissionHandler;
+  onUserInputRequest?: UserInputHandler;
 }
 
 async function resolveCliPath(
@@ -96,6 +101,7 @@ export function copilotSessionConfig(options: CopilotOptions): SessionConfig {
     enableSkills: true,
     enableOnDemandInstructionDiscovery: true,
     interactiveUser: true,
+    onUserInputRequest: options.onUserInputRequest,
     onPermissionRequest:
       options.onPermissionRequest ??
       (() => ({

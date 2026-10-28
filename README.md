@@ -66,20 +66,38 @@ Activity icons indicate session startup and requests in progress, including in
 background repositories. Drag either panel divider to resize it, or focus the
 divider and use the left/right arrow keys.
 
-The transcript shows live responses, commands/tool arguments, output, errors,
-reasoning made available by the CLI and session events. Everything is shown by
-default; the checkboxes at the top hide or show **Messages**, **Reasoning**,
-**Commands / tools**, **Output** and **Session / events** without stopping execution
-or deleting history. Expand **Event details** for raw tool metadata;
-**Session / events** also controls the visibility of these details.
+The default transcript is concise: your messages, Copilot's responses and readable
+command/tool summaries with their running/completed/failed status. Errors remain
+visible. Use the checkboxes to add **Reasoning**, **Output** or **Session / events
+(JSON)**, or hide **Messages** and **Commands / tools**, without stopping execution
+or deleting history. Streaming tool-input fragments are grouped as technical events,
+not shown as individual commands. Raw metadata and timestamps are hidden until
+**Session / events (JSON)** is checked; expand **Event details** to inspect metadata.
 HTTP/HTTPS links, including plain URLs in tool output, open in your browser.
+
+Right-click a repository (or press Shift+F10) to manage its sessions:
+
+- **Close session** stops Copilot but keeps its history and resumable context.
+- **New session** archives the previous conversation and opens a fresh one.
+- **Delete latest session** deletes the latest conversation and restores the
+  previous saved one without starting Copilot.
+- **Delete all sessions for this repository** deletes only this repository's
+  conversations managed by Arranged Agents, never other repositories' sessions.
+
+Deletion requires a quiet inline confirmation and removes both application history
+and the corresponding Copilot sessions through the official SDK API. Repository
+files are not deleted. If deletion fails, remaining histories are retained and
+the error is displayed. Old saved histories remain compatible.
 
 Copilot can inspect the selected repository, use its instructions and run tools
 such as Git or `gh` for pull requests. Permission requests appear directly in
 the conversation panel with **Allow once** and **Reject**, without modal popups,
 notification sounds or automatic approval. Each request identifies its repository,
 including background sessions, and remains visible regardless of display filters.
-Cancelling or closing rejects pending requests.
+Approvals show readable descriptions, full commands, paths and proposed changes
+rather than JSON. Copilot's questions appear as inline choice buttons and, when
+allowed, a free-text answer box. Enter submits; Shift+Enter adds a line.
+Cancelling or closing rejects pending requests and questions.
 GitHub operations use the CLI's existing authentication.
 
 Equations use `$x^2$` inline or `$$E=mc^2$$` on their own line. KaTeX renders

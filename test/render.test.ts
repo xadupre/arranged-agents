@@ -1,6 +1,42 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { renderMarkdown, renderResult, renderText } from "../src/render";
+import { describePermission, describeTool } from "../src/presentation";
+
+test("tool and approval summaries show readable commands, paths and warnings without JSON", () => {
+  assert.equal(
+    describeTool("read", { path: "README.md", viewRange: [1, 10] }),
+    "Path: README.md\nView Range: 1\n10",
+  );
+  assert.equal(
+    describeTool("bash", { command: "git status\nprintf done" }),
+    "git status\nprintf done",
+  );
+  const permission = describePermission({
+    kind: "read",
+    path: "../private",
+    intention: "Inspect instructions",
+    requestSandboxBypass: true,
+    requestSandboxBypassReason: "Outside the workspace",
+  });
+  assert.equal(permission.summary, "Read this file or directory?");
+  assert.match(permission.content, /Inspect instructions\n\n\.\.\/private/);
+  assert.match(permission.content, /Warning:.*outside the sandbox/);
+  assert.match(permission.content, /Outside the workspace/);
+  assert.doesNotMatch(permission.content, /"kind"|[{}]/);
+  assert.match(permission.details, /"kind": "read"/);
+  const write = describePermission({
+    kind: "write",
+    canOfferSessionApproval: false,
+    fileName: "README.md",
+    intention: "Update documentation",
+    diff: "-old\n+new",
+  });
+  assert.equal(
+    write.content,
+    "Update documentation\n\nREADME.md\n\n-old\n+new",
+  );
+});
 
 test("renders structured Markdown and code blocks", () => {
   const html = renderResult(

@@ -2,6 +2,7 @@ import {
   appendFileSync,
   existsSync,
   readFileSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 
@@ -14,6 +15,8 @@ interface Request {
     prompt?: string;
     result?: { kind: string };
   };
+  result?: { answer: string; wasFreeform: boolean };
+  error?: { message: string };
 }
 
 const scenario = readFileSync("scenario", "utf8");
@@ -63,6 +66,23 @@ function reply(id: number, result: unknown, error?: string): void {
 
 function handle(request: Request): void {
   appendFileSync("requests.jsonl", `${JSON.stringify(request)}\n`);
+  if (scenario === "question" && request.id === -1) {
+    if (pendingSend === undefined) {
+      throw new Error("User answer without a pending request.");
+    }
+    reply(pendingSend, {
+      response: {
+        type: "assistant.message",
+        data: {
+          content:
+            request.error?.message ??
+            `Answer: ${request.result?.answer}; freeform: ${request.result?.wasFreeform}`,
+        },
+      },
+    });
+    pendingSend = undefined;
+    return;
+  }
   if (request.id === undefined || scenario === `hang:${request.method}`) {
     return;
   }
@@ -100,7 +120,48 @@ function handle(request: Request): void {
       reply(request.id, { sessionId: request.params?.sessionId });
       break;
     }
+    case "session.getMetadata": {
+      const sessionId = request.params?.sessionId;
+      reply(request.id, {
+        session: existsSync(`history-${sessionId}.json`)
+          ? {
+              sessionId,
+              startTime: new Date().toISOString(),
+              modifiedTime: new Date().toISOString(),
+            }
+          : undefined,
+      });
+      break;
+    }
+    case "session.delete": {
+      const sessionId = request.params?.sessionId;
+      if (
+        existsSync("fail-delete-id") &&
+        readFileSync("fail-delete-id", "utf8") === sessionId
+      ) {
+        reply(request.id, { success: false, error: "Deletion denied" });
+      } else {
+        unlinkSync(`history-${sessionId}.json`);
+        reply(request.id, { success: true });
+      }
+      break;
+    }
     case "session.sendAndWait":
+      if (scenario === "question") {
+        pendingSend = request.id;
+        transmit({
+          jsonrpc: "2.0",
+          id: -1,
+          method: "userInput.request",
+          params: {
+            sessionId: request.params?.sessionId,
+            question: "Which test suite should run?",
+            choices: ["Targeted", "All"],
+            allowFreeform: true,
+          },
+        });
+        break;
+      }
       if (scenario === "permission") {
         pendingSend = request.id;
         transmit({
@@ -147,6 +208,20 @@ function handle(request: Request): void {
         notify(sessionId, "assistant.reasoning", {
           reasoningId: messageId,
           content: "Inspect the repository.",
+        });
+        for (const inputDelta of [
+          '{"command":',
+          '"gh pr list\\nprintf done"}',
+        ]) {
+          notify(sessionId, "assistant.tool_call_delta", {
+            toolCallId: messageId,
+            toolName: "bash",
+            inputDelta,
+          });
+        }
+        notify(sessionId, "tool.execution_progress", {
+          toolCallId: messageId,
+          progressMessage: "Preparing command",
         });
         notify(sessionId, "tool.execution_start", {
           toolCallId: messageId,

@@ -18,9 +18,13 @@ declare function acquireVsCodeApi(): {
   }
   const vscode = acquireVsCodeApi();
   const repositories = element("repositories", HTMLElement);
+  const startedRepositories = element("started-repositories", HTMLElement);
+  const otherRepositories = element("other-repositories", HTMLElement);
   const messages = element("messages", HTMLElement);
   const permissions = element("permissions", HTMLElement);
   const permissionCards = new Map<string, HTMLElement>();
+  const questions = element("questions", HTMLElement);
+  const questionCards = new Map<string, HTMLElement>();
   const question = element("question", HTMLTextAreaElement);
   const send = element("send", HTMLButtonElement);
   const cancel = element("cancel", HTMLButtonElement);
@@ -28,6 +32,10 @@ declare function acquireVsCodeApi(): {
   const error = element("error", HTMLElement);
   const composer = element("composer", HTMLFormElement);
   const filters = element("information-filters", HTMLFieldSetElement);
+  const repositoryMenu = element("repository-menu", HTMLElement);
+  let menuRepositoryId: string | undefined;
+  let menuConfirmation:
+    "delete-last-session" | "delete-all-sessions" | undefined;
   const categories: Record<
     import("./application").ChatMessage["role"],
     import("./application").InformationType
@@ -152,11 +160,12 @@ declare function acquireVsCodeApi(): {
   const drafts = new Map<string, string>();
   const statusLabels = {
     idle: "Not started",
-    saved: "Saved session - click to resume",
+    saved: "Session closed - click to resume",
     starting: "Starting Copilot...",
-    ready: "Session ready",
-    busy: "Copilot is answering...",
+    ready: "Session open - ready",
+    busy: "Session open - Copilot is working...",
     error: "Session stopped - click to restart",
+    stopping: "Updating sessions...",
   };
 
   function showError(message = ""): void {
@@ -180,7 +189,8 @@ declare function acquireVsCodeApi(): {
     const running =
       submitting ||
       repository?.status === "starting" ||
-      repository?.status === "busy";
+      repository?.status === "busy" ||
+      repository?.status === "stopping";
     element("activity-icon", HTMLElement).hidden = !running;
     element("chat-panel", HTMLElement).setAttribute(
       "aria-busy",
@@ -192,10 +202,26 @@ declare function acquireVsCodeApi(): {
   }
 
   function render(next: State): void {
-    if (state?.activeId) {
+    const previousRepositories = new Map(
+      state?.repositories.map((repository) => [repository.id, repository]),
+    );
+    const previousActive = previousRepositories.get(state?.activeId ?? "");
+    const nextActive = next.repositories.find(
+      (entry) => entry.id === next.activeId,
+    );
+    const reset =
+      previousActive?.id === nextActive?.id &&
+      previousActive?.generation !== nextActive?.generation;
+    if (state?.activeId && !reset) {
       drafts.set(state.activeId, question.value);
     }
-    const switched = state?.activeId !== next.activeId;
+    for (const repository of next.repositories) {
+      const previous = previousRepositories.get(repository.id);
+      if (previous && previous.generation !== repository.generation) {
+        drafts.delete(repository.id);
+      }
+    }
+    const switched = state?.activeId !== next.activeId || reset;
     state = next;
     if (
       pending &&
@@ -222,11 +248,15 @@ declare function acquireVsCodeApi(): {
       ? `Ask Copilot about ${active.name}...`
       : "Select a repository to begin.";
 
-    repositories.replaceChildren();
+    startedRepositories.replaceChildren();
+    otherRepositories.replaceChildren();
     for (const repository of state.repositories) {
       const button = document.createElement("button");
       button.type = "button";
       button.className = "repository";
+      button.dataset.repositoryId = repository.id;
+      button.setAttribute("aria-haspopup", "menu");
+      button.setAttribute("aria-controls", "repository-menu");
       button.setAttribute(
         "aria-pressed",
         String(repository.id === state.activeId),
@@ -235,11 +265,17 @@ declare function acquireVsCodeApi(): {
       const name = document.createElement("span");
       name.className = "repository-name";
       const running =
-        repository.status === "starting" || repository.status === "busy";
+        repository.status === "starting" ||
+        repository.status === "busy" ||
+        repository.status === "stopping";
+      const open =
+        repository.status === "ready" || repository.status === "busy";
+      button.classList.toggle("session-open", open);
+      button.classList.toggle("session-working", running);
       button.setAttribute("aria-busy", String(running));
-      if (running) {
+      if (running || open) {
         const icon = document.createElement("span");
-        icon.className = "spinner";
+        icon.className = running ? "spinner" : "session-indicator";
         icon.setAttribute("aria-hidden", "true");
         name.append(icon);
       }
@@ -250,18 +286,190 @@ declare function acquireVsCodeApi(): {
       button.addEventListener("click", () =>
         vscode.postMessage({ type: "select", id: repository.id }),
       );
-      repositories.append(button);
+      button.addEventListener("contextmenu", (event) => {
+        event.preventDefault();
+        openRepositoryMenu(repository.id, event.clientX, event.clientY);
+      });
+      button.addEventListener("keydown", (event) => {
+        if (
+          event.key === "ContextMenu" ||
+          (event.shiftKey && event.key === "F10")
+        ) {
+          event.preventDefault();
+          const bounds = button.getBoundingClientRect();
+          openRepositoryMenu(repository.id, bounds.left, bounds.bottom);
+        }
+      });
+      (open || running ? startedRepositories : otherRepositories).append(
+        button,
+      );
     }
-    if (state.repositories.length === 0) {
-      repositories.textContent =
-        "No direct child repository containing .git was found.";
+    if (startedRepositories.children.length === 0) {
+      startedRepositories.textContent = "No active session.";
+    }
+    if (otherRepositories.children.length === 0) {
+      otherRepositories.textContent =
+        state.repositories.length === 0
+          ? "No direct child repository containing .git was found."
+          : "All repositories have an active session.";
     }
 
     renderPermissions();
+    renderQuestions();
     renderMessages(switched);
     showError(state.error);
     updateControls();
+    updateRepositoryMenu();
   }
+
+  function closeRepositoryMenu(restoreFocus = false): void {
+    const id = menuRepositoryId;
+    menuRepositoryId = undefined;
+    menuConfirmation = undefined;
+    repositoryMenu.hidden = true;
+    repositoryMenu.replaceChildren();
+    if (restoreFocus) {
+      [...repositories.querySelectorAll<HTMLButtonElement>(".repository")]
+        .find((button) => button.dataset.repositoryId === id)
+        ?.focus();
+    }
+  }
+
+  function updateRepositoryMenu(): void {
+    const repository = state?.repositories.find(
+      (entry) => entry.id === menuRepositoryId,
+    );
+    if (!repository) {
+      closeRepositoryMenu();
+      return;
+    }
+    for (const button of repositoryMenu.querySelectorAll<HTMLButtonElement>(
+      "button[data-action]",
+    )) {
+      const action = button.dataset.action;
+      button.disabled =
+        repository.status === "stopping" ||
+        (action === "close-session" &&
+          !["starting", "busy", "ready"].includes(repository.status)) ||
+        (action?.startsWith("delete-") === true && !repository.sessionCount);
+    }
+  }
+
+  function openRepositoryMenu(id: string, x: number, y: number): void {
+    closeRepositoryMenu();
+    menuRepositoryId = id;
+    repositoryMenu.hidden = false;
+    const actions = [
+      ["close-session", "Close session"],
+      ["new-session", "New session"],
+      ["delete-last-session", "Delete latest session..."],
+      ["delete-all-sessions", "Delete all sessions for this repository..."],
+    ] as const;
+    for (const [action, label] of actions) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.setAttribute("role", "menuitem");
+      button.dataset.action = action;
+      button.textContent = label;
+      button.addEventListener("click", (event) => {
+        event.stopPropagation();
+        if (
+          action === "delete-last-session" ||
+          action === "delete-all-sessions"
+        ) {
+          confirmDeletion(action);
+        } else {
+          closeRepositoryMenu(true);
+          vscode.postMessage({ type: action, id });
+        }
+      });
+      repositoryMenu.append(button);
+    }
+    updateRepositoryMenu();
+    positionRepositoryMenu(x, y);
+    repositoryMenu.querySelector<HTMLButtonElement>("button:enabled")?.focus();
+  }
+
+  function positionRepositoryMenu(x: number, y: number): void {
+    repositoryMenu.style.left = `${Math.max(0, Math.min(x, window.innerWidth - repositoryMenu.offsetWidth))}px`;
+    repositoryMenu.style.top = `${Math.max(0, Math.min(y, window.innerHeight - repositoryMenu.offsetHeight))}px`;
+  }
+
+  function confirmDeletion(
+    action: "delete-last-session" | "delete-all-sessions",
+  ): void {
+    const repository = state?.repositories.find(
+      (entry) => entry.id === menuRepositoryId,
+    );
+    if (!repository) {
+      closeRepositoryMenu();
+      return;
+    }
+    menuConfirmation = action;
+    repositoryMenu.replaceChildren();
+    const prompt = document.createElement("p");
+    prompt.textContent = `Permanently delete ${action === "delete-all-sessions" ? "all sessions" : "the latest session"} for ${repository.name}, including their Copilot history? Repository files will not be changed.`;
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.setAttribute("role", "menuitem");
+    confirm.dataset.action = action;
+    confirm.textContent = "Delete permanently";
+    confirm.addEventListener("click", () => {
+      const id = menuRepositoryId;
+      const type = menuConfirmation;
+      if (id && type) {
+        closeRepositoryMenu(true);
+        vscode.postMessage({ type, id });
+      }
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.setAttribute("role", "menuitem");
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", () => closeRepositoryMenu(true));
+    repositoryMenu.append(prompt, confirm, cancel);
+    updateRepositoryMenu();
+    const bounds = repositoryMenu.getBoundingClientRect();
+    positionRepositoryMenu(bounds.left, bounds.top);
+    cancel.focus();
+  }
+
+  repositoryMenu.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      closeRepositoryMenu(true);
+      return;
+    }
+    const buttons = [
+      ...repositoryMenu.querySelectorAll<HTMLButtonElement>("button:enabled"),
+    ];
+    const index = buttons.findIndex(
+      (button) => button === document.activeElement,
+    );
+    const next =
+      event.key === "ArrowDown"
+        ? (index + 1) % buttons.length
+        : event.key === "ArrowUp"
+          ? (index - 1 + buttons.length) % buttons.length
+          : event.key === "Home"
+            ? 0
+            : event.key === "End"
+              ? buttons.length - 1
+              : undefined;
+    if (next !== undefined) {
+      event.preventDefault();
+      buttons[next]?.focus();
+    }
+  });
+  document.addEventListener("click", (event) => {
+    if (
+      event.target instanceof Node &&
+      !repositoryMenu.contains(event.target)
+    ) {
+      closeRepositoryMenu();
+    }
+  });
+  window.addEventListener("blur", () => closeRepositoryMenu());
 
   function renderPermissions(): void {
     const pending = state?.permissions ?? [];
@@ -282,9 +490,15 @@ declare function acquireVsCodeApi(): {
       const repository = state?.repositories.find(
         (entry) => entry.id === request.repositoryId,
       );
-      heading.textContent = `Copilot (${repository?.name ?? request.repositoryId}): allow ${request.kind}?`;
-      const details = document.createElement("pre");
-      details.textContent = request.details;
+      heading.textContent = `Copilot (${repository?.name ?? request.repositoryId}): ${request.summary}`;
+      const content = document.createElement("pre");
+      content.textContent = request.content;
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Event details";
+      const raw = document.createElement("pre");
+      raw.textContent = request.details;
+      details.append(summary, raw);
       const actions = document.createElement("div");
       actions.className = "permission-actions";
       for (const approve of [true, false]) {
@@ -303,11 +517,110 @@ declare function acquireVsCodeApi(): {
         });
         actions.append(button);
       }
-      card.append(heading, details, actions);
+      card.append(heading, content, details, actions);
       permissionCards.set(request.id, card);
       permissions.append(card);
     }
+    const showDetails =
+      filters.querySelector<HTMLInputElement>('input[value="system"]')
+        ?.checked !== false;
+    for (const details of permissions.querySelectorAll("details")) {
+      details.hidden = !showDetails;
+    }
     permissions.hidden = pending.length === 0;
+  }
+
+  function renderQuestions(): void {
+    const pending = state?.questions ?? [];
+    const ids = new Set(pending.map((request) => request.id));
+    for (const [id, card] of questionCards) {
+      if (!ids.has(id)) {
+        card.remove();
+        questionCards.delete(id);
+      }
+    }
+    for (const request of pending) {
+      if (questionCards.has(request.id)) {
+        continue;
+      }
+      const card = document.createElement("form");
+      card.className = "agent-question";
+      const heading = document.createElement("h3");
+      const repository = state?.repositories.find(
+        (entry) => entry.id === request.repositoryId,
+      );
+      heading.textContent = `Copilot (${repository?.name ?? request.repositoryId})`;
+      const prompt = document.createElement("p");
+      prompt.className = "question-text";
+      prompt.textContent = request.question;
+      const actions = document.createElement("div");
+      actions.className = "permission-actions";
+      const answer = (text: string): void => {
+        for (const control of card.querySelectorAll("button, textarea")) {
+          if (
+            control instanceof HTMLButtonElement ||
+            control instanceof HTMLTextAreaElement
+          ) {
+            control.disabled = true;
+          }
+        }
+        vscode.postMessage({ type: "answer", id: request.id, answer: text });
+      };
+      for (const choice of request.choices ?? []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = choice;
+        button.addEventListener("click", () => answer(choice));
+        actions.append(button);
+      }
+      card.append(heading, prompt, actions);
+      if (request.allowFreeform !== false) {
+        const label = document.createElement("label");
+        label.textContent = "Your answer";
+        const input = document.createElement("textarea");
+        input.rows = 2;
+        input.maxLength = 20000;
+        input.id = `answer-${request.id}`;
+        label.htmlFor = input.id;
+        const submit = document.createElement("button");
+        submit.type = "submit";
+        submit.textContent = "Reply";
+        submit.disabled = true;
+        input.addEventListener("input", () => {
+          submit.disabled = !input.value.trim();
+        });
+        input.addEventListener("keydown", (event) => {
+          if (
+            event.key === "Enter" &&
+            !event.shiftKey &&
+            !event.isComposing &&
+            event.keyCode !== 229
+          ) {
+            event.preventDefault();
+            if (!submit.disabled) {
+              card.requestSubmit();
+            }
+          }
+        });
+        card.addEventListener("submit", (event) => {
+          event.preventDefault();
+          if (!submit.disabled && input.value.trim()) {
+            answer(input.value);
+          }
+        });
+        card.append(label, input, submit);
+      }
+      const cancel = document.createElement("button");
+      cancel.type = "button";
+      cancel.textContent = "Cancel request";
+      cancel.addEventListener("click", () => {
+        vscode.postMessage({ type: "cancel", id: request.repositoryId });
+      });
+      card.append(cancel);
+      questionCards.set(request.id, card);
+      questions.append(card);
+    }
+    questions.hidden = pending.length === 0;
   }
 
   function renderMessages(switched = false): void {
@@ -324,18 +637,33 @@ declare function acquireVsCodeApi(): {
     );
     messages.replaceChildren();
     for (const [index, message] of (state?.messages ?? []).entries()) {
+      const failed =
+        message.error ||
+        (message.role === "output" && message.title?.endsWith(": failed"));
       const article = document.createElement("article");
       article.className = `message ${message.role}`;
+      if (failed) {
+        article.classList.add("failed");
+      }
       article.dataset.index = String(index);
+      const category =
+        message.role === "tool" &&
+        (message.title === "assistant.tool_call_delta" ||
+          message.title?.startsWith("tool.") ||
+          (message.title?.startsWith("Tool: ") &&
+            !message.details &&
+            message.content.trimStart().startsWith("{")))
+          ? "system"
+          : categories[message.role];
       const filter = filters.querySelector<HTMLInputElement>(
-        `input[value="${categories[message.role]}"]`,
+        `input[value="${category}"]`,
       );
-      article.hidden = filter?.checked === false;
+      article.hidden = !failed && filter?.checked === false;
       const heading = document.createElement("h3");
       heading.textContent =
         (message.title ?? roleLabels[message.role]) +
-        (message.agentId ? ` [${message.agentId}]` : "");
-      if (message.timestamp) {
+        (message.agentId && showEventDetails ? ` [${message.agentId}]` : "");
+      if (message.timestamp && showEventDetails) {
         const time = document.createElement("time");
         time.dateTime = message.timestamp;
         time.textContent = message.timestamp;
@@ -405,7 +733,10 @@ declare function acquireVsCodeApi(): {
       }
     }
   });
-  filters.addEventListener("change", () => renderMessages());
+  filters.addEventListener("change", () => {
+    renderMessages();
+    renderPermissions();
+  });
   const openLink = (event: MouseEvent): void => {
     if (event.type === "auxclick" && event.button !== 1) {
       return;

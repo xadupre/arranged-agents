@@ -30,6 +30,16 @@ saves periodically and flushes on tab disposal/deactivation. Snapshots contain
 transcripts, drafts, active repository and SDK session IDs, not browser-rendered
 HTML. Only discovered repositories can resume; loading history never spawns a CLI.
 
+Repository context-menu actions serialize lifecycle changes per repository,
+settle interrupted operations and preserve closed session IDs. New sessions
+archive the prior transcript, draft and SDK ID in the same versioned snapshot;
+older snapshots without archives remain valid. Deletion stops the live client
+first and uses ``getSessionMetadata`` / ``deleteSession`` on a temporary SDK
+client for only this repository's recorded IDs. Local records are removed after
+successful SDK deletion; partial failures retain remaining records. Deleting the
+latest session restores the previous archive lazily. Session-management actions
+also flush the snapshot, and conversation generations invalidate browser draft caches.
+
 ``src/prompt.ts`` validates size limits and builds the prompt without attaching
 files or adding workspace context.
 
@@ -39,7 +49,10 @@ enables tools and repository discovery. The extension confirms requested
 permissions through inline webview controls without modal dialogs or notifications.
 ``AgentApplication`` owns pending decisions, routes them by unique request ID and
 rejects them on cancellation, failure, repository removal or closure. Decisions are
-not persisted or automatically replayed. Its original one-shot helper is retained; the application
+not persisted or automatically replayed. The SDK's user-input handler follows the
+same lifecycle for inline choices and typed answers. ``src/presentation.ts``
+formats tool and permission descriptions without exposing JSON by default.
+The original one-shot helper is retained; the application
 and CLI smoke test use the persistent conversation implementation.
 
 ``src/render.ts`` escapes HTML, blocks remote images and renders equations
@@ -61,11 +74,14 @@ Validation entry points
 * ``test/application.test.ts`` exercises the real SDK/CLI fixture through the
   application model, including live events, lazy startup, session reuse, navigation and cleanup.
   It also checks disk-backed close/reopen, SDK context resumption and missing-session recovery.
+  Repository-menu cases cover archived histories, SDK deletion, repository isolation,
+  partial deletion failure/retry and shutdown during management.
 * ``test/storage.test.ts`` checks private atomic saves, root isolation,
   corrupt snapshots and write-error recovery using the real filesystem.
 * ``test/webview.test.ts`` runs the compiled UI in a real DOM implementation,
   checking panel resizing, activity, Enter/Shift+Enter, links, category filters,
   equations, saved drafts and repository-specific errors.
+  It also checks keyboard/context menus, inline deletion confirmation and draft resets.
 * ``test/copilot.test.ts`` runs the real SDK against
   ``test/fixtures/copilot.ts``, a local stdio protocol fixture. It checks startup,
   permission callbacks, failure propagation, deadlines, cancellation and child-process termination.
@@ -73,6 +89,7 @@ Validation entry points
   repository, including reading a unique marker file through the CLI's tools.
   It also checks that tool execution/result events arrive, then stops the CLI,
   resumes the same session and verifies earlier context without rereading the file.
+  Finally it stops the session and deletes its own temporary history through the SDK.
   It requires the user's authenticated CLI.
 * ``scripts/extension-host-smoke.ts`` checks activation, commands and an open app tab
   in a real VS Code extension host when launched through the dedicated F5 config.
