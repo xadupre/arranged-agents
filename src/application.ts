@@ -4,6 +4,7 @@ import { buildPrompt, MAX_PROMPT_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
 import { describeTool } from "./presentation";
+import { isGitHubSection, type GitHubSection } from "./github";
 import type {
   SavedApplication,
   SavedConversation,
@@ -74,6 +75,7 @@ interface RepositorySession {
 
 export type ApplicationMessage =
   | { type: "ready" | "refresh" }
+  | { type: "github"; id: string; section: GitHubSection; cursor?: string }
   | { type: "select" | "cancel" | "restart"; id: string }
   | {
       type:
@@ -108,6 +110,24 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   }
   if (!("id" in value) || typeof value.id !== "string") {
     throw new Error("The application message must identify a repository.");
+  }
+  if (
+    value.type === "github" &&
+    "section" in value &&
+    isGitHubSection(value.section) &&
+    (!("cursor" in value) ||
+      value.cursor === undefined ||
+      (typeof value.cursor === "string" && value.cursor.length <= 4096))
+  ) {
+    return {
+      type: "github",
+      id: value.id,
+      section: value.section,
+      cursor:
+        "cursor" in value && typeof value.cursor === "string"
+          ? value.cursor
+          : undefined,
+    };
   }
   if (
     value.type === "answer" &&

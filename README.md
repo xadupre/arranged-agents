@@ -8,7 +8,7 @@
 A three-panel application inside a VS Code editor tab, using your **locally
 installed GitHub Copilot CLI**:
 
-- **Left:** empty, reserved for later.
+- **Left:** issues, PRs, your comments and later responses, and recent commits.
 - **Center:** the selected repository's Copilot conversation, rendered as HTML
   with Markdown and mathematical equations.
 - **Right:** direct child directories containing a `.git` directory or file.
@@ -19,6 +19,7 @@ installed GitHub Copilot CLI**:
 - VS Code 1.105 or newer.
 - Node.js 22.13 or newer for development.
 - GitHub Copilot CLI installed and authenticated: run `copilot login`.
+- Git and GitHub CLI installed; run `gh auth login` for the activity sidebar.
 - A GitHub account with access to Copilot. Requests use your Copilot allowance.
 
 The CLI runs locally, but model requests still go to GitHub Copilot: this is not
@@ -47,7 +48,7 @@ the application opens automatically and scans the first workspace folder.
 For an installed VSIX, run **Arranged Agents: Open** from the Command Palette.
 The old **Ask Copilot** command is an alias for opening the application.
 
-Click a repository on the right, wait for **Session ready**, and send messages
+Click a repository on the right, wait for **Session open - ready**, and send messages
 in the center with **Enter** or **Send**. **Shift+Enter** inserts a new line.
 Switching repositories preserves their independent conversations
 and drafts. **Refresh** rescans the parent directory without restarting existing
@@ -65,6 +66,16 @@ while retaining the displayed history, without replaying it to the model.
 Activity icons indicate session startup and requests in progress, including in
 background repositories. Drag either panel divider to resize it, or focus the
 divider and use the left/right arrow keys.
+
+The left panel follows the selected repository with four buttons:
+**Issues**, **Reviews** (pull requests), **Commits** and **Comments**.
+Your issues/PRs have a distinct background; **Replied** marks your participation
+and **After you** indicates a comment or submitted review after your latest response.
+**Comments** shows your comments/reviews plus subsequent responses, including closed
+discussions. **Commits** lists the latest 30 commits on the current local branch.
+Click titles or comment timestamps to open their GitHub page in your browser.
+GitHub feeds require an installed, authenticated `gh` CLI (`gh auth login`).
+Use **Refresh** for new activity and **Load more** for older discussions.
 
 The default transcript is concise: your messages, Copilot's responses and readable
 command/tool summaries with their running/completed/failed status. Errors remain

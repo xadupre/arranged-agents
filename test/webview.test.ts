@@ -6,6 +6,7 @@ import { Script } from "node:vm";
 import { JSDOM } from "jsdom";
 import type { ApplicationMessage, ApplicationState } from "../src/application";
 import { renderApplication, renderMarkdown, renderText } from "../src/render";
+import type { GitHubUpdate, GitHubPage } from "../src/github";
 
 async function setup(t: TestContext) {
   const posted: ApplicationMessage[] = [];
@@ -59,10 +60,294 @@ async function setup(t: TestContext) {
     questions: [],
   };
   const document = dom.window.document;
-  return { dom, document, posted, publish, state };
+  const publishGitHub = (update: GitHubUpdate): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: structuredClone(update),
+      }),
+    );
+  };
+  return { dom, document, posted, publish, publishGitHub, state };
 }
 
-test("the tab has an empty left panel and starts no session until a repository is clicked", async (t) => {
+test("the activity sidebar shows viewer flags, preserves cached content during streaming, and opens GitHub links", async (t) => {
+  const { dom, document, posted, publish, publishGitHub, state } =
+    await setup(t);
+  state.activeId = "alpha";
+  publish(state);
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    cursor: undefined,
+  });
+  const page: GitHubPage = {
+    repository: "acme/project",
+    viewer: "Ada",
+    cursor: "next",
+    items: [
+      {
+        id: "one",
+        title: "#1 <script>Issue</script>",
+        author: "Ada",
+        date: "2026-01-01T12:00:00Z",
+        url: "https://github.com/acme/project/issues/1",
+        mine: true,
+        replied: true,
+        afterMe: true,
+      },
+    ],
+  };
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    status: "ready",
+    append: false,
+    page,
+  });
+  const card = document.querySelector(".github-item");
+  assert.ok(card?.classList.contains("github-mine"));
+  assert.deepEqual(
+    [...document.querySelectorAll(".github-badge")].map(
+      (badge) => badge.textContent,
+    ),
+    ["Yours", "Replied", "After you"],
+  );
+  assert.equal(document.querySelector("#github-items script"), null);
+  const title = document.querySelector<HTMLAnchorElement>("#github-items h3 a");
+  assert.ok(title);
+  title.dispatchEvent(
+    new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }),
+  );
+  assert.deepEqual(posted.at(-1), {
+    type: "openExternal",
+    url: "https://github.com/acme/project/issues/1",
+  });
+  state.messages = [{ role: "assistant", content: "Streaming response" }];
+  const count = posted.length;
+  publish(state);
+  assert.equal(posted.length, count);
+  assert.equal(document.querySelector(".github-item"), card);
+  document.querySelector<HTMLButtonElement>("#github-more")?.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    cursor: "next",
+  });
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    status: "ready",
+    append: true,
+    page: {
+      ...page,
+      cursor: undefined,
+      items: [
+        ...page.items,
+        { ...page.items[0]!, id: "two", title: "#2 Another" },
+      ],
+    },
+  });
+  assert.equal(document.querySelectorAll(".github-item").length, 2);
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#github-more")?.hidden,
+    true,
+  );
+  state.activeId = "beta";
+  publish(state);
+  assert.deepEqual(posted.at(-1), {
+    type: "github",
+    id: "beta",
+    section: "issues",
+    cursor: undefined,
+  });
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    status: "ready",
+    append: false,
+    page,
+  });
+  assert.equal(document.querySelectorAll(".github-item").length, 0);
+  const before = posted.length;
+  state.activeId = "alpha";
+  publish(state);
+  assert.equal(posted.length, before);
+  assert.equal(document.querySelectorAll(".github-item").length, 1);
+  document.querySelector<HTMLButtonElement>("#github-refresh")?.click();
+  publishGitHub({
+    type: "github",
+    id: "alpha",
+    section: "issues",
+    status: "error",
+    append: false,
+    error: "Run gh auth login",
+  });
+  assert.match(
+    document.getElementById("github-error")?.textContent ?? "",
+    /gh auth login/,
+  );
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#github-refresh")?.disabled,
+    false,
+  );
+  assert.equal(document.getElementById("error")?.hidden, true);
+});
+
+test("sidebar tabs request separate feeds and safely display comments and commit permalinks", async (t) => {
+  const { dom, document, posted, publish, publishGitHub, state } =
+    await setup(t);
+  state.activeId = "alpha";
+  publish(state);
+  for (const section of ["reviews", "commits", "comments"] as const) {
+    document
+      .querySelector<HTMLButtonElement>(
+        `#github-tabs [data-section="${section}"]`,
+      )
+      ?.click();
+    assert.deepEqual(posted.at(-1), {
+      type: "github",
+      id: "alpha",
+      section,
+      cursor: undefined,
+    });
+    const url =
+      section === "commits"
+        ? "https://github.com/acme/project/commit/abc123"
+        : "https://github.com/acme/project/pull/1";
+    publishGitHub({
+      type: "github",
+      id: "alpha",
+      section,
+      status: "ready",
+      append: false,
+      page: {
+        repository: "acme/project",
+        items: [
+          {
+            id: "entry",
+            title: section,
+            author: "Ada",
+            date: "2026-01-01T12:00:00Z",
+            url,
+            mine: false,
+            replied: false,
+            afterMe: false,
+            comments:
+              section === "comments"
+                ? [
+                    {
+                      id: "own",
+                      author: "Ada",
+                      mine: true,
+                      body: "<script>My comment</script>",
+                      date: "2026-01-01T12:00:00Z",
+                      url: `${url}#comment`,
+                    },
+                  ]
+                : undefined,
+          },
+        ],
+      },
+    });
+    const anchor =
+      document.querySelector<HTMLAnchorElement>("#github-items h3 a");
+    assert.ok(anchor);
+    anchor.dispatchEvent(
+      new dom.window.MouseEvent("auxclick", {
+        button: 1,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    assert.deepEqual(posted.at(-1), { type: "openExternal", url });
+    if (section === "comments") {
+      assert.equal(document.querySelector("#github-items script"), null);
+      assert.match(
+        document.querySelector(".github-comment-body")?.textContent ?? "",
+        /<script>My comment<\/script>/,
+      );
+      document.querySelector<HTMLAnchorElement>(".github-comment a")?.click();
+      assert.deepEqual(posted.at(-1), {
+        type: "openExternal",
+        url: `${url}#comment`,
+      });
+    }
+  }
+  const before = posted.length;
+  document
+    .querySelector<HTMLButtonElement>('#github-tabs [data-section="commits"]')
+    ?.click();
+  assert.equal(posted.length, before);
+  assert.equal(
+    document.querySelectorAll("#github-tabs [aria-pressed=true]").length,
+    1,
+  );
+});
+
+test("all sidebar feeds remain newest-first after pagination and duplicate updates", async (t) => {
+  const { document, publish, publishGitHub, state } = await setup(t);
+  state.activeId = "alpha";
+  publish(state);
+  const item = (id: string, date: string) => ({
+    id,
+    title: id,
+    date,
+    author: "Ada",
+    mine: false,
+    replied: false,
+    afterMe: false,
+  });
+  const titles = (): (string | null)[] =>
+    [...document.querySelectorAll(".github-item h3")].map(
+      (heading) => heading.textContent,
+    );
+  for (const section of ["issues", "reviews", "comments", "commits"] as const) {
+    document
+      .querySelector<HTMLButtonElement>(
+        `#github-tabs [data-section="${section}"]`,
+      )
+      ?.click();
+    publishGitHub({
+      type: "github",
+      id: "alpha",
+      section,
+      status: "ready",
+      append: false,
+      page: {
+        repository: "acme/project",
+        cursor: "next",
+        items: [
+          item("older", "2026-01-03T01:00:00+02:00"),
+          item("newer", "2026-01-03T00:00:00Z"),
+        ],
+      },
+    });
+    assert.deepEqual(titles(), ["newer", "older"]);
+    document.querySelector<HTMLButtonElement>("#github-more")?.click();
+    publishGitHub({
+      type: "github",
+      id: "alpha",
+      section,
+      status: "ready",
+      append: true,
+      page: {
+        repository: "acme/project",
+        items: [
+          item("oldest", "2026-01-01T12:00:00Z"),
+          item("older", "2026-01-05T12:00:00Z"),
+        ],
+      },
+    });
+    assert.deepEqual(titles(), ["older", "newer", "oldest"]);
+  }
+});
+
+test("the tab has activity navigation and starts no session until a repository is clicked", async (t) => {
   const { document, posted, publish, state } = await setup(t);
   assert.equal(
     document.querySelectorAll(".application > aside, .application > section")
@@ -70,8 +355,16 @@ test("the tab has an empty left panel and starts no session until a repository i
     3,
   );
   assert.equal(document.querySelectorAll('[role="separator"]').length, 2);
-  assert.equal(document.getElementById("left-panel")?.children.length, 0);
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    [...document.querySelectorAll("#github-tabs button")].map(
+      (button) => button.textContent,
+    ),
+    ["Issues", "Reviews", "Commits", "Comments"],
+  );
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
   publish(state);
   assert.equal(
     document.querySelector<HTMLTextAreaElement>("#question")?.disabled,
@@ -179,7 +472,10 @@ test("right-click menus manage the clicked repository and confirm irreversible d
     return button;
   };
   open("beta");
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
   const close = action("close-session");
   state.repositories[0]!.status = "busy";
   publish(state);
@@ -587,7 +883,10 @@ test("the default transcript is concise and optional filters reveal information 
     document.querySelector(".message.tool")?.hasAttribute("hidden"),
     false,
   );
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
 });
 
 test("Session / events also hides raw event details without hiding tools or output", async (t) => {
@@ -648,7 +947,10 @@ test("Session / events also hides raw event details without hiding tools or outp
     state.messages[1]!.details,
   );
   assert.equal(document.querySelectorAll(".message:not([hidden])").length, 4);
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
 });
 
 test("inline permission controls remain visible across filters and repository changes without grabbing focus", async (t) => {
@@ -709,7 +1011,10 @@ test("inline permission controls remain visible across filters and repository ch
   state.activeId = "beta";
   publish(state);
   assert.equal(document.activeElement, allow);
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
   allow.click();
   allow.click();
   assert.deepEqual(posted.at(-1), {
@@ -926,7 +1231,10 @@ test("saved drafts restore without starting Copilot, edits are persisted and fai
   assert.ok(question);
   assert.equal(question.value, state.draft);
   assert.equal(question.disabled, true);
-  assert.deepEqual(posted, [{ type: "ready" }]);
+  assert.deepEqual(
+    posted.filter((message) => message.type !== "github"),
+    [{ type: "ready" }],
+  );
   document.querySelector<HTMLButtonElement>(".repository")?.click();
   assert.deepEqual(posted.at(-1), { type: "select", id: "alpha" });
   state.repositories[0]!.status = "ready";

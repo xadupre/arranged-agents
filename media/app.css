@@ -24,6 +24,96 @@ body {
 #left-panel {
   min-width: 0;
   overflow: auto;
+  padding: 12px;
+}
+
+#github-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-bottom: 12px;
+}
+
+#github-tabs button {
+  padding: 4px 8px;
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+}
+
+#github-tabs button[aria-pressed="true"] {
+  background: var(--vscode-list-activeSelectionBackground);
+  color: var(--vscode-list-activeSelectionForeground);
+}
+
+.github-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+}
+
+#github-status,
+.github-metadata {
+  color: var(--vscode-descriptionForeground);
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+}
+
+#github-error {
+  color: var(--vscode-errorForeground);
+  white-space: pre-wrap;
+}
+
+.github-item {
+  margin-bottom: 12px;
+  padding: 8px;
+  border: 1px solid var(--vscode-panel-border);
+  overflow-wrap: anywhere;
+}
+
+.github-item h3 {
+  margin: 0;
+  font-size: 0.95em;
+}
+
+.github-mine {
+  border-inline-start: 3px solid var(--vscode-progressBar-background, #0078d4);
+  background: color-mix(
+    in srgb,
+    var(--vscode-progressBar-background, #0078d4) 12%,
+    var(--vscode-editor-background)
+  );
+}
+
+.github-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.github-badge {
+  padding: 2px 5px;
+  border: 1px solid var(--vscode-panel-border);
+  border-radius: 4px;
+  font-size: 0.8em;
+}
+
+.github-badge.after-me {
+  color: var(--vscode-editorWarning-foreground, #bf8803);
+  border-color: currentColor;
+}
+
+.github-comment {
+  margin-top: 8px;
+  padding: 6px;
+  border-inline-start: 2px solid var(--vscode-panel-border);
+}
+
+.github-comment-body {
+  white-space: pre-wrap;
+  max-height: 16em;
+  overflow: auto;
 }
 
 .divider {
