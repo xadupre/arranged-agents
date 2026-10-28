@@ -1,5 +1,8 @@
 # Arranged Agents
 
+[![Tests](https://github.com/xadupre/arranged-agents/actions/workflows/tests.yml/badge.svg?branch=main)](https://github.com/xadupre/arranged-agents/actions/workflows/tests.yml)
+[![Code coverage](https://codecov.io/gh/xadupre/arranged-agents/branch/main/graph/badge.svg)](https://codecov.io/gh/xadupre/arranged-agents)
+
 A VS Code extension that asks your **locally installed GitHub Copilot CLI** a
 question and presents its answer as structured Markdown in a side panel.
 
@@ -15,13 +18,20 @@ an offline model. No separate API key is required.
 
 ## Try it
 
+From a Bash terminal in this checkout:
+
 ```bash
-npm ci --omit=optional
-npm run compile
+./start.sh
 ```
 
-Open this directory in VS Code and press **F5**. In the Extension Development
-Host, run **Arranged Agents: Ask Copilot** from the Command Palette.
+The script installs missing dependencies, compiles, and opens a new VS Code
+development window. It chooses the desktop `code` executable, not the restricted
+remote CLI, and removes the remote IPC hook. Other installed extensions are
+disabled in that window. No model request is sent automatically.
+
+Alternatively run `npm ci --omit=optional` and open this directory in VS Code,
+then select **Run Arranged Agents** and press **F5**. In the development window,
+run **Arranged Agents: Ask Copilot** from the Command Palette.
 Enter a question; if you selected text, explicitly choose whether to include it.
 The response opens beside your editor. The progress notification allows cancellation.
 
@@ -30,10 +40,23 @@ executable path. Optionally set `arrangedAgents.model` to a supported model ID.
 In Remote SSH, WSL, or a dev container, the CLI must be installed and authenticated
 on the machine hosting the workspace extension.
 
+## Documentation and automation
+
+Sphinx documentation: [getting started](docs/getting_started.rst),
+[features and safeguards](docs/features.rst), [source guide](docs/design.rst),
+and [development, coverage, releases and documentation build](docs/development.rst).
+
+Like [onnx-light-viewer](https://github.com/xadupre/onnx-light-viewer), automation
+is split into Linux/Windows tests, nightly TypeScript coverage with Codecov,
+weekly Sphinx documentation, and tagged GitHub releases with a VSIX attachment.
+Configure `CODECOV_TOKEN` for coverage uploads. Workflows never run the paid
+Copilot smoke test or publish to the Marketplace.
+
 ## Checks and packaging
 
 ```bash
 npm run check
+npm run coverage
 npm run package
 code --install-extension ./arranged-agents-0.1.0.vsix
 ```
@@ -49,7 +72,8 @@ The unit tests also run the real SDK against a small local stdio CLI fixture:
 they cover PATH lookup, missing CLI, authentication/model errors, empty answers,
 and cancellation/timeouts during startup, session creation, generation, and
 shutdown. They verify that each child process exits. No model requests are made
-by `npm run check`.
+by `npm run check`. The Bash launcher also has focused subprocess tests on
+Linux; they do not open VS Code.
 
 To check activation in a real extension host, select **Test Arranged Agents
 activation** in VS Code's Run and Debug view and press **F5**. On success it writes
@@ -61,7 +85,7 @@ extension path. This tests the development extension, not installation of the VS
 Verified with Node.js **24.22.1**, Copilot CLI **1.0.105**, and VS Code's WSL remote
 CLI **1.143.1**:
 
-- `npm ci --omit=optional`, `npm run check` (21 tests), and `npm run package` pass.
+- `npm ci --omit=optional`, `npm run check`, and `npm run package` pass.
 - `npm run smoke` reaches the authenticated local CLI, receives
   `ARRANGED_AGENTS_OK`, and renders the result.
 - `code --install-extension ./arranged-agents-0.1.0.vsix` succeeds; the installed

@@ -1,4 +1,7 @@
 node_modules/
 dist/
+build/
+.venv/
+docs/_build/
 *.vsix
 .DS_Store

@@ -4,6 +4,10 @@
 src/**
 test/**
 scripts/**
+docs/**
+build/**
+.venv/**
+start.sh
 tsconfig.json
 eslint.config.mjs
 .prettierignore
