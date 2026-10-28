@@ -200,9 +200,7 @@ export function renderApplication(resources: {
     <form id="composer">
       <label for="question">Message to Copilot</label>
       <textarea id="question" rows="4" maxlength="20000" placeholder="Select a repository to begin." disabled></textarea>
-      <label for="images">Attach images</label>
-      <input id="images" type="file" accept="${IMAGE_MIME_TYPES.join(",")}" multiple data-max-count="${MAX_IMAGES}" data-max-bytes="${MAX_IMAGE_BYTES}" disabled>
-      <div id="image-previews" aria-label="Attached images"></div>
+      <div id="image-previews" aria-label="Attached images" data-mime-types="${IMAGE_MIME_TYPES.join(",")}" data-max-count="${MAX_IMAGES}" data-max-bytes="${MAX_IMAGE_BYTES}"></div>
       <div class="composer-actions">
         <span>Enter to send; Shift+Enter for a new line. Math: $x^2$ or $$E=mc^2$$</span>
         <button id="restart" type="button" title="Start fresh without replaying the displayed history" hidden>New session</button>

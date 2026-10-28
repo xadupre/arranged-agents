@@ -106,7 +106,8 @@ test(
     state.repositories[0]!.status = "ready";
     state.repositories[1]!.status = "ready";
     publish(state);
-    const input = document.querySelector<HTMLInputElement>("#images")!;
+    assert.equal(document.querySelector('input[type="file"]'), null);
+    assert.equal(document.querySelector('label[for="images"]'), null);
     const send = document.querySelector<HTMLButtonElement>("#send")!;
     const question = document.querySelector<HTMLTextAreaElement>("#question")!;
     const file = new dom.window.File(
@@ -124,12 +125,15 @@ test(
           childList: true,
         });
       });
-    Object.defineProperty(input, "files", {
-      configurable: true,
-      value: [file],
+    const clipboardPaste = new dom.window.Event("paste", {
+      cancelable: true,
+    });
+    Object.defineProperty(clipboardPaste, "clipboardData", {
+      value: { files: [file] },
     });
     let previewChanged = changed();
-    input.dispatchEvent(new dom.window.Event("change"));
+    question.dispatchEvent(clipboardPaste);
+    assert.ok(clipboardPaste.defaultPrevented);
     assert.ok(send.disabled, "reading images must block submission");
     await previewChanged;
     assert.equal(
@@ -183,13 +187,31 @@ test(
   },
 );
 
-test("image controls reject unsupported types, empty files, oversized files and too many attachments", async (t) => {
+test("pasting images rejects unsupported types, empty files, oversized files and too many attachments", async (t) => {
   const { dom, document, publish, state } = await setup(t);
-  const input = document.querySelector<HTMLInputElement>("#images")!;
-  assert.ok(input.disabled);
+  const question = document.querySelector<HTMLTextAreaElement>("#question")!;
+  const pasteFiles = (files: File[]) => {
+    const event = new dom.window.Event("paste", { cancelable: true });
+    Object.defineProperty(event, "clipboardData", { value: { files } });
+    question.dispatchEvent(event);
+    return event;
+  };
+  assert.ok(question.disabled);
+  assert.equal(
+    pasteFiles([new dom.window.File(["x"], "image.png", { type: "image/png" })])
+      .defaultPrevented,
+    false,
+  );
+  assert.equal(document.querySelector("#image-previews img"), null);
   state.activeId = "alpha";
   state.repositories[0]!.status = "ready";
   publish(state);
+  const textPaste = new dom.window.Event("paste", { cancelable: true });
+  Object.defineProperty(textPaste, "clipboardData", {
+    value: { items: [{ kind: "string", type: "text/plain" }] },
+  });
+  question.dispatchEvent(textPaste);
+  assert.equal(textPaste.defaultPrevented, false);
   for (const files of [
     [new dom.window.File(["<svg/>"], "unsafe.svg", { type: "image/svg+xml" })],
     [new dom.window.File([], "empty.png", { type: "image/png" })],
@@ -203,8 +225,7 @@ test("image controls reject unsupported types, empty files, oversized files and 
       () => new dom.window.File(["x"], "image.png", { type: "image/png" }),
     ),
   ]) {
-    Object.defineProperty(input, "files", { configurable: true, value: files });
-    input.dispatchEvent(new dom.window.Event("change"));
+    assert.ok(pasteFiles(files).defaultPrevented);
     assert.match(
       document.querySelector("#error")!.textContent!,
       /Attach up to five/,
