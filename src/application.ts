@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Conversation } from "./conversation";
-import { buildPrompt, MAX_PROMPT_LENGTH } from "./prompt";
+import { buildPrompt, MAX_PROMPT_LENGTH, MAX_SELECTION_LENGTH } from "./prompt";
 import { discoverRepositories, type Repository } from "./repositories";
 import { isExternalUrl } from "./links";
 import { describeTool } from "./presentation";
@@ -35,6 +35,8 @@ export interface ApplicationState {
     hasSavedSession?: boolean;
     sessionCount?: number;
     generation?: number;
+    parallelCount?: number;
+    queuedCount?: number;
   })[];
   activeId?: string;
   messages: ChatMessage[];
@@ -71,6 +73,14 @@ interface RepositorySession {
   generation: number;
   removed?: boolean;
   eventMessages: Map<string, ChatMessage>;
+  parallel: Map<string, RepositorySession>;
+  queue: {
+    question: string;
+    prompt: string;
+    message: ChatMessage;
+    resolve: () => void;
+    reject: (error: unknown) => void;
+  }[];
 }
 
 export type ApplicationMessage =
@@ -89,7 +99,7 @@ export type ApplicationMessage =
   | { type: "permission"; id: string; approve: boolean }
   | { type: "answer"; id: string; answer: string }
   | { type: "openExternal"; url: string }
-  | { type: "send"; id: string; question: string };
+  | { type: "send"; id: string; question: string; parallel?: boolean };
 
 export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (!value || typeof value !== "object" || !("type" in value)) {
@@ -167,9 +177,19 @@ export function parseApplicationMessage(value: unknown): ApplicationMessage {
   if (
     value.type === "send" &&
     "question" in value &&
-    typeof value.question === "string"
+    typeof value.question === "string" &&
+    (!("parallel" in value) ||
+      value.parallel === undefined ||
+      typeof value.parallel === "boolean")
   ) {
-    return { type: "send", id: value.id, question: value.question };
+    return {
+      type: "send",
+      id: value.id,
+      question: value.question,
+      ...("parallel" in value && typeof value.parallel === "boolean"
+        ? { parallel: value.parallel }
+        : {}),
+    };
   }
   throw new Error("Unknown application message.");
 }
@@ -182,12 +202,17 @@ export class AgentApplication {
   private readonly saved = new Map<string, SavedRepositorySession>();
   private readonly permissions = new Map<
     string,
-    { request: PendingPermission; resolve: (approve: boolean) => void }
+    {
+      request: PendingPermission;
+      owner: RepositorySession;
+      resolve: (approve: boolean) => void;
+    }
   >();
   private readonly questions = new Map<
     string,
     {
       request: PendingQuestion;
+      owner: RepositorySession;
       resolve: (response: UserInputResponse) => void;
       reject: (error: Error) => void;
     }
@@ -197,6 +222,7 @@ export class AgentApplication {
     readonly root: string,
     private readonly createConversation: (
       repository: Repository,
+      requestId?: string,
     ) => Conversation,
     private readonly onChange: () => void,
     saved?: SavedApplication,
@@ -221,6 +247,9 @@ export class AgentApplication {
       if (!ids.has(id)) {
         session.removed = true;
         session.controller?.abort();
+        for (const child of session.parallel.values())
+          child.controller?.abort();
+        this.cancelQueue(session);
         this.clearPendingRequests(id);
         await session.conversation?.dispose();
         if (session.managing) {
@@ -242,11 +271,20 @@ export class AgentApplication {
           status: saved?.sessionId ? "saved" : "idle",
           sessionId: saved?.sessionId,
           draft: saved?.draft ?? "",
-          messages: saved?.messages.map((message) => ({ ...message })) ?? [],
+          messages:
+            saved?.messages.map((message) => ({
+              ...message,
+              title:
+                message.title === "Queued - after current work"
+                  ? "Not sent - previous application ended"
+                  : message.title,
+            })) ?? [],
           history:
             saved?.history?.map((entry) => this.copyConversation(entry)) ?? [],
           generation: 0,
           eventMessages: new Map(),
+          parallel: new Map(),
+          queue: [],
         });
       }
     }
@@ -263,11 +301,20 @@ export class AgentApplication {
       repositories: [...this.sessions.values()]
         .map((session) => ({
           ...session.repository,
-          status: session.managing ? ("stopping" as const) : session.status,
+          status: session.managing
+            ? ("stopping" as const)
+            : session.parallel.size &&
+                ["ready", "error"].includes(session.status)
+              ? ("busy" as const)
+              : session.status,
           hasSavedSession: Boolean(session.sessionId),
           sessionCount:
-            session.history.length + (this.hasConversation(session) ? 1 : 0),
+            session.history.length +
+            session.parallel.size +
+            (this.hasConversation(session) ? 1 : 0),
           generation: session.generation,
+          parallelCount: session.parallel.size,
+          queuedCount: session.queue.length,
         }))
         .sort((left, right) => left.name.localeCompare(right.name)),
       activeId: this.activeId,
@@ -287,8 +334,9 @@ export class AgentApplication {
   requestPermission(
     repositoryId: string,
     permission: Omit<PendingPermission, "id" | "repositoryId">,
+    requestId?: string,
   ): Promise<boolean> {
-    const session = this.getSession(repositoryId);
+    const session = this.getRequestSession(repositoryId, requestId);
     if (
       this.closed ||
       session.controller?.signal.aborted ||
@@ -296,9 +344,16 @@ export class AgentApplication {
     ) {
       return Promise.resolve(false);
     }
-    const request = { ...permission, id: randomUUID(), repositoryId };
+    const request = {
+      ...permission,
+      summary: requestId
+        ? `Parallel ${requestId.slice(0, 8)}: ${permission.summary}`
+        : permission.summary,
+      id: randomUUID(),
+      repositoryId,
+    };
     return new Promise((resolve) => {
-      this.permissions.set(request.id, { request, resolve });
+      this.permissions.set(request.id, { request, owner: session, resolve });
       this.onChange();
     });
   }
@@ -317,9 +372,10 @@ export class AgentApplication {
   askQuestion(
     repositoryId: string,
     question: UserInputRequest,
+    requestId?: string,
   ): Promise<UserInputResponse> {
     this.assertOpen();
-    const session = this.getSession(repositoryId);
+    const session = this.getRequestSession(repositoryId, requestId);
     if (
       session.controller?.signal.aborted ||
       !["starting", "busy"].includes(session.status)
@@ -328,13 +384,27 @@ export class AgentApplication {
     }
     const request: PendingQuestion = {
       ...question,
+      question: requestId
+        ? `Parallel ${requestId.slice(0, 8)}: ${question.question}`
+        : question.question,
       choices: question.choices ? [...question.choices] : undefined,
       id: randomUUID(),
       repositoryId,
     };
-    session.messages.push({ role: "assistant", content: question.question });
+    const message: ChatMessage = {
+      role: "assistant",
+      content: question.question,
+      ...(requestId ? { title: `Parallel ${requestId.slice(0, 8)}` } : {}),
+    };
+    session.messages.push(message);
+    if (requestId) this.getSession(repositoryId).messages.push(message);
     return new Promise((resolve, reject) => {
-      this.questions.set(request.id, { request, resolve, reject });
+      this.questions.set(request.id, {
+        request,
+        owner: session,
+        resolve,
+        reject,
+      });
       this.onChange();
     });
   }
@@ -355,10 +425,14 @@ export class AgentApplication {
       throw new Error("Choose one of the proposed answers.");
     }
     this.questions.delete(id);
-    this.getSession(pending.request.repositoryId).messages.push({
+    const message: ChatMessage = {
       role: "user",
       content: answer,
-    });
+    };
+    this.getSession(pending.request.repositoryId).messages.push(message);
+    if (pending.owner !== this.getSession(pending.request.repositoryId)) {
+      pending.owner.messages.push(message);
+    }
     pending.resolve({ answer, wasFreeform });
     this.onChange();
   }
@@ -393,7 +467,11 @@ export class AgentApplication {
     this.assertOpen();
     const current = this.getSession(id);
     this.assertAvailable(current);
-    if (current.status === "starting" || current.status === "busy") {
+    if (
+      current.status === "starting" ||
+      current.status === "busy" ||
+      current.parallel.size
+    ) {
       throw new Error(
         "Cancel the running operation before starting a new session.",
       );
@@ -498,7 +576,7 @@ export class AgentApplication {
         throw error;
       } finally {
         session.starting = undefined;
-        this.clearPendingRequests(id);
+        this.clearPendingRequests(id, session);
         this.onChange();
       }
     };
@@ -506,13 +584,14 @@ export class AgentApplication {
     return session.starting;
   }
 
-  async send(id: string, question: string): Promise<void> {
+  async send(id: string, question: string, parallel = true): Promise<void> {
     this.assertOpen();
     const session = this.getSession(id);
     this.assertAvailable(session);
     if (
       id !== this.activeId ||
-      session.status !== "ready" ||
+      (!["ready", "busy"].includes(session.status) &&
+        !(session.status === "error" && session.parallel.size && parallel)) ||
       !session.conversation
     ) {
       throw new Error(
@@ -520,7 +599,34 @@ export class AgentApplication {
       );
     }
     const prompt = buildPrompt(question);
-    session.messages.push({ role: "user", content: question.trim() });
+    if (session.status === "busy" || session.parallel.size) {
+      if (parallel) return this.sendParallel(session, question);
+      return new Promise<void>((resolve, reject) => {
+        const message: ChatMessage = {
+          role: "user",
+          content: question.trim(),
+          title: "Queued - after current work",
+        };
+        session.queue.push({ question, prompt, message, resolve, reject });
+        session.messages.push(message);
+        session.draft = "";
+        this.onChange();
+      });
+    }
+    return this.sendMain(session, question, prompt);
+  }
+
+  private async sendMain(
+    session: RepositorySession,
+    question: string,
+    prompt: string,
+    queuedMessage?: ChatMessage,
+  ): Promise<void> {
+    const conversation = session.conversation;
+    if (!conversation) throw new Error("The repository session is not open.");
+    const id = session.repository.id;
+    if (queuedMessage) queuedMessage.title = "Sent after current work";
+    else session.messages.push({ role: "user", content: question.trim() });
     session.draft = "";
     session.status = "busy";
     session.error = undefined;
@@ -528,7 +634,6 @@ export class AgentApplication {
     session.controller = controller;
     this.onChange();
     const requestStart = session.messages.length;
-    const conversation = session.conversation;
     const run = async (): Promise<void> => {
       try {
         const answer = await conversation.send(prompt, controller.signal);
@@ -538,22 +643,23 @@ export class AgentApplication {
             .some(
               (message) =>
                 message.role === "assistant" &&
+                !message.title &&
                 !message.agentId &&
                 message.content === answer,
             )
         ) {
           session.messages.push({ role: "assistant", content: answer });
         }
-        session.status = "ready";
       } catch (error) {
         if (!this.closed) {
           session.sessionId = undefined;
           session.draft = question;
         }
         this.fail(session, error);
+        this.cancelQueue(session);
         throw error;
       } finally {
-        this.clearPendingRequests(id);
+        this.clearPendingRequests(id, session);
         this.onChange();
       }
     };
@@ -563,6 +669,143 @@ export class AgentApplication {
       await sending;
     } finally {
       session.sending = undefined;
+      if (session.status === "busy") session.status = "ready";
+      this.drainQueue(session);
+      this.onChange();
+    }
+  }
+
+  private async sendParallel(
+    parent: RepositorySession,
+    question: string,
+  ): Promise<void> {
+    const requestId = randomUUID();
+    const label = `Parallel ${requestId.slice(0, 8)}`;
+    let remaining = MAX_SELECTION_LENGTH;
+    const context: string[] = [];
+    for (
+      let index = parent.messages.length - 1;
+      index >= 0 && remaining > 0;
+      index--
+    ) {
+      const message = parent.messages[index]!;
+      if (!["user", "assistant", "tool"].includes(message.role)) continue;
+      const excerpt =
+        `${message.role}: ${message.content.slice(-remaining)}`.slice(
+          -remaining,
+        );
+      context.push(excerpt);
+      remaining -= excerpt.length;
+    }
+    const prompt = buildPrompt(
+      question,
+      context.reverse().join("\n").slice(-MAX_SELECTION_LENGTH),
+    );
+    const user: ChatMessage = {
+      role: "user",
+      title: label,
+      content: question.trim(),
+    };
+    const controller = new AbortController();
+    const child: RepositorySession = {
+      repository: parent.repository,
+      status: "starting",
+      messages: [user],
+      draft: "",
+      history: [],
+      generation: 0,
+      eventMessages: new Map(),
+      parallel: new Map(),
+      queue: [],
+      controller,
+    };
+    parent.parallel.set(requestId, child);
+    parent.messages.push(user);
+    parent.draft = "";
+    this.onChange();
+    const run = async (): Promise<void> => {
+      try {
+        const conversation = this.createConversation(
+          parent.repository,
+          requestId,
+        );
+        child.conversation = conversation;
+        await conversation.start(controller.signal, (event) => {
+          if (!this.closed && parent.parallel.get(requestId) === child) {
+            this.recordEvent(child, event, parent.messages, label);
+          }
+        });
+        child.sessionId = conversation.sessionId;
+        child.status = "busy";
+        this.onChange();
+        const answer = await conversation.send(prompt, controller.signal);
+        if (
+          !child.messages.some(
+            (message) =>
+              message.role === "assistant" &&
+              !message.agentId &&
+              message.content === answer,
+          )
+        ) {
+          const message: ChatMessage = {
+            role: "assistant",
+            title: label,
+            content: answer,
+          };
+          child.messages.push(message);
+          parent.messages.push(message);
+        }
+      } catch (error) {
+        const message: ChatMessage = {
+          role: "assistant",
+          title: `${label} - failed`,
+          error: true,
+          content: error instanceof Error ? error.message : String(error),
+        };
+        child.messages.push(message);
+        parent.messages.push(message);
+        throw error;
+      } finally {
+        this.clearPendingRequests(parent.repository.id, child);
+        try {
+          await child.conversation?.dispose();
+        } finally {
+          child.sessionId ??= child.conversation?.sessionId;
+          parent.history.push(this.copyConversation(child));
+          parent.parallel.delete(requestId);
+          this.onChange();
+          this.drainQueue(parent);
+        }
+      }
+    };
+    child.sending = run();
+    return child.sending;
+  }
+
+  private drainQueue(session: RepositorySession): void {
+    if (
+      this.closed ||
+      session.removed ||
+      session.managing ||
+      session.sending ||
+      session.status !== "ready" ||
+      session.parallel.size
+    )
+      return;
+    const next = session.queue.shift();
+    if (!next) return;
+    void this.sendMain(session, next.question, next.prompt, next.message).then(
+      next.resolve,
+      next.reject,
+    );
+  }
+
+  private cancelQueue(session: RepositorySession): void {
+    for (const queued of session.queue.splice(0)) {
+      queued.message.title = "Not sent - queue cancelled";
+      queued.reject(
+        new DOMException("The queued message was cancelled.", "AbortError"),
+      );
     }
   }
 
@@ -570,6 +813,8 @@ export class AgentApplication {
     this.assertOpen();
     const session = this.getSession(id);
     session.controller?.abort();
+    for (const child of session.parallel.values()) child.controller?.abort();
+    this.cancelQueue(session);
     this.clearPendingRequests(id);
     this.onChange();
   }
@@ -663,11 +908,15 @@ export class AgentApplication {
       });
     }
     session.controller?.abort();
+    this.cancelQueue(session);
+    const children = [...session.parallel.values()];
+    for (const child of children) child.controller?.abort();
     this.clearPendingRequests(session.repository.id);
     await conversation?.dispose();
     await Promise.allSettled([
       ...(session.starting ? [session.starting] : []),
       ...(session.sending ? [session.sending] : []),
+      ...children.flatMap((child) => (child.sending ? [child.sending] : [])),
     ]);
     session.sessionId = sessionId ?? conversation?.sessionId;
     session.conversation = undefined;
@@ -731,6 +980,8 @@ export class AgentApplication {
         });
       }
       session.controller?.abort();
+      this.cancelQueue(session);
+      for (const child of session.parallel.values()) child.controller?.abort();
     }
     await Promise.all(
       [...this.sessions.values()].map((session) =>
@@ -742,29 +993,42 @@ export class AgentApplication {
         ...(session.starting ? [session.starting] : []),
         ...(session.sending ? [session.sending] : []),
         ...(session.managing ? [session.managing] : []),
+        ...[...session.parallel.values()].flatMap((child) =>
+          child.sending ? [child.sending] : [],
+        ),
       ]),
     );
   }
 
   private saveSession(session: RepositorySession): SavedRepositorySession {
+    const history = [...session.history, ...session.parallel.values()];
     return {
       id: session.repository.id,
       ...this.copyConversation(session),
-      history: session.history.length
-        ? session.history.map((entry) => this.copyConversation(entry))
+      history: history.length
+        ? history.map((entry) => this.copyConversation(entry))
         : undefined,
     };
   }
 
-  private clearPendingRequests(repositoryId?: string): void {
+  private clearPendingRequests(
+    repositoryId?: string,
+    owner?: RepositorySession,
+  ): void {
     for (const [id, pending] of this.permissions) {
-      if (!repositoryId || pending.request.repositoryId === repositoryId) {
+      if (
+        (!repositoryId || pending.request.repositoryId === repositoryId) &&
+        (!owner || pending.owner === owner)
+      ) {
         this.permissions.delete(id);
         pending.resolve(false);
       }
     }
     for (const [id, pending] of this.questions) {
-      if (!repositoryId || pending.request.repositoryId === repositoryId) {
+      if (
+        (!repositoryId || pending.request.repositoryId === repositoryId) &&
+        (!owner || pending.owner === owner)
+      ) {
         this.questions.delete(id);
         pending.reject(
           new DOMException("The question was cancelled.", "AbortError"),
@@ -783,7 +1047,26 @@ export class AgentApplication {
     return session;
   }
 
-  private recordEvent(session: RepositorySession, event: SessionEvent): void {
+  private getRequestSession(id: string, requestId?: string): RepositorySession {
+    const parent = this.getSession(id);
+    if (!requestId) return parent;
+    const child = parent.parallel.get(requestId);
+    if (!child) throw new Error("This parallel request has ended.");
+    return child;
+  }
+
+  private recordEvent(
+    session: RepositorySession,
+    event: SessionEvent,
+    destination?: ChatMessage[],
+    label?: string,
+  ): void {
+    const push = (message: ChatMessage): void => {
+      if (label)
+        message.title = message.title ? `${label}: ${message.title}` : label;
+      session.messages.push(message);
+      destination?.push(message);
+    };
     const upsert = (
       key: string,
       role: ChatMessage["role"],
@@ -804,7 +1087,7 @@ export class AgentApplication {
           agentId: event.agentId,
         };
         session.eventMessages.set(id, message);
-        session.messages.push(message);
+        push(message);
       }
     };
     switch (event.type) {
@@ -919,7 +1202,7 @@ export class AgentApplication {
           this.onChange();
           return;
         }
-        session.messages.push(message);
+        push(message);
       }
     }
     this.onChange();

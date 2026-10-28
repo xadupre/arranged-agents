@@ -31,7 +31,7 @@ async function setup(
   const createApplication = (saved?: SavedApplication): AgentApplication => {
     const application: AgentApplication = new AgentApplication(
       root,
-      (repository) =>
+      (repository, requestId) =>
         new CopilotConversation({
           cliPath: join(__dirname, "fixtures", "copilot.js"),
           workingDirectory: repository.path,
@@ -40,12 +40,13 @@ async function setup(
             kind: (await application.requestPermission(
               repository.id,
               describePermission(request, invocation.promptRequest),
+              requestId,
             ))
               ? "approve-once"
               : "reject",
           }),
           onUserInputRequest: (request) =>
-            application.askQuestion(repository.id, request),
+            application.askQuestion(repository.id, request, requestId),
         }),
       () => {
         changes++;
@@ -69,22 +70,28 @@ async function setup(
     changes: () => changes,
     snapshots,
     createApplication,
-    waitForPermission: async (repositoryId: string) => {
+    waitForPermission: async (repositoryId: string, except?: string) => {
       for (;;) {
         const request = application
           .getState()
-          .permissions.find((entry) => entry.repositoryId === repositoryId);
+          .permissions.find(
+            (entry) =>
+              entry.repositoryId === repositoryId && entry.id !== except,
+          );
         if (request) {
           return request;
         }
         await once(updates, "change");
       }
     },
-    waitForQuestion: async (repositoryId: string) => {
+    waitForQuestion: async (repositoryId: string, except?: string) => {
       for (;;) {
         const request = application
           .getState()
-          .questions.find((entry) => entry.repositoryId === repositoryId);
+          .questions.find(
+            (entry) =>
+              entry.repositoryId === repositoryId && entry.id !== except,
+          );
         if (request) {
           return request;
         }
@@ -96,7 +103,9 @@ async function setup(
 
 async function requests(
   directory: string,
-): Promise<{ method: string; params?: { sessionId?: string } }[]> {
+): Promise<
+  { method: string; params?: { sessionId?: string; prompt?: string } }[]
+> {
   return (await readFile(join(directory, "requests.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -106,6 +115,274 @@ async function requests(
 async function pid(directory: string): Promise<number> {
   return Number(await readFile(join(directory, "pid"), "utf8"));
 }
+
+test("parallel questions run immediately with visible context and isolated approvals, while OFF messages drain FIFO", async (t) => {
+  const { application, root, waitForPermission } = await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const mainPid = await pid(alpha);
+  const mainId = application.getSnapshot().sessions[0]!.sessionId;
+  const main = application.send(alpha, "Main task");
+  const mainPermission = await waitForPermission(alpha);
+  const firstQueued = application.send(alpha, "First follow-up", false);
+  const secondQueued = application.send(alpha, "Second follow-up", false);
+  const side = application.send(alpha, "Parallel question");
+  const sidePermission = await waitForPermission(alpha, mainPermission.id);
+  const sidePid = await pid(alpha);
+  assert.notEqual(sidePid, mainPid);
+  assert.match(sidePermission.summary, /^Parallel /);
+  assert.equal(application.getState().repositories[0]?.parallelCount, 1);
+  assert.equal(application.getState().repositories[0]?.queuedCount, 2);
+  const sends = (await requests(alpha)).filter(
+    (request) => request.method === "session.sendAndWait",
+  );
+  assert.equal(sends.length, 2);
+  assert.equal(sends[0]?.params?.sessionId, mainId);
+  assert.match(sends[1]?.params?.prompt ?? "", /Main task/);
+  assert.match(sends[1]?.params?.prompt ?? "", /Parallel question/);
+  application.respondToPermission(sidePermission.id, true);
+  await side;
+  assert.throws(() => process.kill(sidePid, 0), { code: "ESRCH" });
+  assert.doesNotThrow(() => process.kill(mainPid, 0));
+  assert.deepEqual(application.getState().permissions, [mainPermission]);
+  assert.equal(application.getState().repositories[0]?.queuedCount, 2);
+  application.respondToPermission(mainPermission.id, true);
+  await main;
+  const firstPermission = await waitForPermission(alpha);
+  application.respondToPermission(firstPermission.id, true);
+  await firstQueued;
+  const secondPermission = await waitForPermission(alpha);
+  application.respondToPermission(secondPermission.id, true);
+  await secondQueued;
+  const finalSends = (await requests(alpha)).filter(
+    (request) => request.method === "session.sendAndWait",
+  );
+  assert.deepEqual(
+    finalSends.slice(2).map((request) => request.params?.prompt),
+    ["First follow-up", "Second follow-up"],
+  );
+  assert.ok(
+    finalSends
+      .slice(2)
+      .every((request) => request.params?.sessionId === mainId),
+  );
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.equal(application.getState().repositories[0]?.queuedCount, 0);
+  assert.equal(
+    application
+      .getState()
+      .messages.filter(
+        (message) =>
+          message.role === "assistant" &&
+          message.content === "Repository access approved",
+      ).length,
+    4,
+  );
+  assert.equal(application.getSnapshot().sessions[0]?.history?.length, 1);
+});
+
+test("finishing the main task does not clear a parallel question, and queued messages wait for both", async (t) => {
+  const { application, root, waitForQuestion } = await setup(t, "question");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const main = application.send(alpha, "Main task");
+  const mainQuestion = await waitForQuestion(alpha);
+  const side = application.send(alpha, "Side question");
+  const sideQuestion = await waitForQuestion(alpha, mainQuestion.id);
+  const queued = application.send(alpha, "After both", false);
+  assert.match(sideQuestion.question, /^Parallel /);
+  application.answerQuestion(mainQuestion.id, "Targeted");
+  await main;
+  assert.deepEqual(application.getState().questions, [sideQuestion]);
+  assert.equal(application.getState().repositories[0]?.status, "busy");
+  assert.equal(application.getState().repositories[0]?.queuedCount, 1);
+  application.answerQuestion(sideQuestion.id, "All");
+  await side;
+  const queuedQuestion = await waitForQuestion(alpha);
+  application.answerQuestion(queuedQuestion.id, "Targeted");
+  await queued;
+  assert.equal(application.getState().repositories[0]?.status, "ready");
+  assert.deepEqual(application.getState().questions, []);
+});
+
+test("parallel stream IDs and failures stay isolated from the main conversation", async (t) => {
+  const { application, root, waitForPermission } = await setup(t, "permission");
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const main = application.send(alpha, "Main task");
+  const permission = await waitForPermission(alpha);
+  await writeFile(join(alpha, "scenario"), "empty");
+  await assert.rejects(
+    application.send(alpha, "Fail independently"),
+    /no answer/,
+  );
+  assert.deepEqual(application.getState().permissions, [permission]);
+  assert.equal(application.getState().repositories[0]?.status, "busy");
+  assert.ok(
+    application
+      .getState()
+      .messages.some(
+        (message) => message.error && message.title?.startsWith("Parallel "),
+      ),
+  );
+  await writeFile(join(alpha, "scenario"), "events");
+  await application.send(alpha, "First stream");
+  await application.send(alpha, "Second stream");
+  const messages = application.getState().messages;
+  assert.equal(
+    messages.filter(
+      (message) =>
+        message.role === "tool" && message.title?.endsWith("bash - completed"),
+    ).length,
+    2,
+  );
+  assert.equal(
+    messages.filter(
+      (message) =>
+        message.role === "assistant" &&
+        !message.agentId &&
+        message.content === "## Fixture answer",
+    ).length,
+    2,
+  );
+  assert.deepEqual(application.getState().permissions, [permission]);
+  application.respondToPermission(permission.id, true);
+  await main;
+});
+
+test("parallel SDK IDs persist for repository deletion, while a saved queue is never resumed", async (t) => {
+  const { application, root, createApplication } = await setup(
+    t,
+    "persist-hang",
+  );
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const mainId = application.getSnapshot().sessions[0]!.sessionId;
+  const main = application.send(alpha, "Long-running main task");
+  const mainRejected = assert.rejects(main, { name: "AbortError" });
+  await waitForRequest(alpha, "session.sendAndWait");
+  await writeFile(join(alpha, "scenario"), "persist");
+  await application.send(alpha, "Independent request");
+  const queued = application.send(alpha, "Never automatically replay", false);
+  const queuedRejected = assert.rejects(queued, { name: "AbortError" });
+  const storage = new ApplicationStorage(join(root, "storage"), root);
+  await storage.save(application.getSnapshot());
+  const restored = createApplication(await storage.load());
+  await restored.refresh();
+  const entry = restored
+    .getSnapshot()
+    .sessions.find((session) => session.id === alpha);
+  const sideId = entry?.history?.[0]?.sessionId;
+  assert.ok(sideId && sideId !== mainId);
+  assert.ok(
+    entry?.messages.some(
+      (message) =>
+        message.content === "Never automatically replay" &&
+        message.title === "Not sent - previous application ended",
+    ),
+  );
+  await application.closeSession(alpha);
+  await Promise.all([mainRejected, queuedRejected]);
+  await restored.deleteSessions(alpha, true);
+  assert.deepEqual(
+    new Set(
+      (await requests(alpha))
+        .filter((request) => request.method === "session.delete")
+        .map((request) => request.params?.sessionId),
+    ),
+    new Set([mainId, sideId]),
+  );
+  assert.equal(
+    (await requests(alpha)).filter(
+      (request) => request.method === "session.sendAndWait",
+    ).length,
+    2,
+  );
+  assert.equal(restored.getState().repositories[0]?.sessionCount, 0);
+});
+
+test("a main-request failure cancels its queue without hiding or stopping active parallel work", async (t) => {
+  const { application, root, waitForPermission, waitForQuestion } = await setup(
+    t,
+    "permission-error",
+  );
+  const alpha = join(root, "alpha");
+  await application.select(alpha);
+  const main = application.send(alpha, "Fail after approval");
+  const mainRejected = assert.rejects(main, /Main request failed/);
+  const permission = await waitForPermission(alpha);
+  const queued = application.send(alpha, "Do not send after failure", false);
+  const queuedRejected = assert.rejects(queued, { name: "AbortError" });
+  await writeFile(join(alpha, "scenario"), "question");
+  const side = application.send(alpha, "Keep working independently");
+  const question = await waitForQuestion(alpha);
+  application.respondToPermission(permission.id, true);
+  await Promise.all([mainRejected, queuedRejected]);
+  assert.equal(application.getState().repositories[0]?.status, "busy");
+  assert.deepEqual(application.getState().questions, [question]);
+  await writeFile(join(alpha, "scenario"), "events");
+  await application.send(alpha, "Another parallel request");
+  application.answerQuestion(question.id, "Targeted");
+  await side;
+  assert.equal(application.getState().repositories[0]?.status, "error");
+  assert.match(application.getState().error ?? "", /Main request failed/);
+});
+
+test("cancel, close and repository removal stop parallel work and never replay queued requests", async (t) => {
+  for (const action of ["cancel", "close", "remove", "dispose"]) {
+    await t.test(action, async (t) => {
+      const { application, root, waitForPermission, createApplication } =
+        await setup(t, "permission");
+      const alpha = join(root, "alpha");
+      await application.select(alpha);
+      const mainPid = await pid(alpha);
+      const main = application.send(alpha, "Main task");
+      const mainRejected = assert.rejects(main, { name: "AbortError" });
+      const mainPermission = await waitForPermission(alpha);
+      const side = application.send(alpha, "Parallel task");
+      const sideRejected = assert.rejects(side, { name: "AbortError" });
+      await waitForPermission(alpha, mainPermission.id);
+      const sidePid = await pid(alpha);
+      const queued = application.send(alpha, "Must not run", false);
+      const queuedRejected = assert.rejects(queued, { name: "AbortError" });
+      if (action === "cancel") application.cancel(alpha);
+      else if (action === "close") await application.closeSession(alpha);
+      else if (action === "dispose") await application.dispose();
+      else {
+        await rm(join(alpha, ".git"), { recursive: true });
+        await application.refresh();
+      }
+      await Promise.all([mainRejected, sideRejected, queuedRejected]);
+      assert.deepEqual(application.getState().permissions, []);
+      assert.throws(() => process.kill(mainPid, 0), { code: "ESRCH" });
+      assert.throws(() => process.kill(sidePid, 0), { code: "ESRCH" });
+      assert.equal(
+        (await requests(alpha)).filter(
+          (request) => request.method === "session.sendAndWait",
+        ).length,
+        2,
+      );
+      const saved = application.getSnapshot();
+      const entry = saved.sessions.find((session) => session.id === alpha);
+      assert.ok(
+        entry?.messages.some(
+          (message) =>
+            message.content === "Must not run" &&
+            message.title === "Not sent - queue cancelled",
+        ),
+      );
+      assert.equal(entry?.history?.length, 1);
+      const restored = createApplication(saved);
+      await restored.refresh();
+      assert.equal(
+        (await requests(alpha)).filter(
+          (request) => request.method === "session.sendAndWait",
+        ).length,
+        2,
+      );
+    });
+  }
+});
 
 test("repository sessions start only on click, persist across switches, and keep conversations isolated", async (t) => {
   const { application, root, changes } = await setup(t);
@@ -739,11 +1016,11 @@ test("switching repositories during a request does not misroute messages or canc
   await application.select(alpha);
   const running = application.send(alpha, "Stay in alpha");
   const rejected = assert.rejects(running, { name: "AbortError" });
+  await application.select(beta);
   await assert.rejects(
-    application.send(alpha, "Overlapping"),
+    application.send(alpha, "Wrong selected repository"),
     /ready repository/,
   );
-  await application.select(beta);
   assert.equal(application.getState().activeId, beta);
   assert.deepEqual(application.getState().messages, []);
   application.cancel(alpha);
@@ -797,6 +1074,7 @@ test("unknown paths and malformed UI messages cannot start sessions", async (t) 
     {},
     { type: "select", id: 1 },
     { type: "send", id: "alpha", question: {} },
+    { type: "send", id: "alpha", question: "Hello", parallel: "false" },
     { type: "openExternal", url: "command:workbench.action.terminal.new" },
     { type: "openExternal", url: "javascript:alert(1)" },
     { type: "openExternal", url: "file:///etc/passwd" },

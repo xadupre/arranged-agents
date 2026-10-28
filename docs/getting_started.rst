@@ -50,6 +50,25 @@ enter a message in the central panel and press **Enter** or click **Send**, for 
 
    Explain AbortController in three points and give a TypeScript example.
 
+The **Parallel ON/OFF** button beside **Send** defaults to ON. You can keep typing
+and sending while an operation runs. ON starts a separate Copilot session
+immediately, with up to 80,000 characters from the visible conversation as reference
+context; its messages, tools and approvals have a **Parallel** label. It can run
+commands and modify files with the normal permission controls. Both agents share
+the working directory, so edits to the same files can conflict.
+
+OFF queues messages for the main agent, in submission order, after both the main
+request and any parallel requests finish. Queued entries are marked in the transcript.
+Changing the button affects future submissions only. When nothing is running,
+either mode uses the main session normally. Parallel answers are visible and saved
+but are not automatically injected into the main agent's model history; file changes
+remain shared. Completed parallel sessions are archived and covered by the repository's
+session-deletion controls.
+
+**Cancel**, closing the session or application, and removing the repository stop
+parallel requests too. Queued messages are marked as not sent and are never replayed
+automatically. A parallel failure is displayed without stopping the main request.
+
 Use **Shift+Enter** for a new line. By default, the transcript shows messages and
 concise command/tool summaries, including completion status. Errors stay visible.
 Check **Reasoning**, **Output** or **Session / events (JSON)** to add details;
@@ -77,8 +96,9 @@ list. During startup or work, a blue tint and spinner show activity, even for
 background repositories. Selection keeps its own border, independently of session
 status. Closed, saved sessions are not marked as open.
 **Refresh** rescans the parent directory while keeping sessions that still exist.
-**Cancel** ends the selected repository's operation and session; click that
-repository again to start a new one. Earlier messages are kept on screen as
+**Cancel** ends all running operations and discards the queue for the selected
+repository. If its main session was interrupted, click that repository again to
+start a new one. Earlier messages are kept on screen as
 reference, not replayed to the restarted session.
 
 Closing the application tab or VS Code stops the CLI processes and saves the

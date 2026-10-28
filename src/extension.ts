@@ -77,7 +77,7 @@ export function activate(context: vscode.ExtensionContext): void {
     };
     const application: AgentApplication = new AgentApplication(
       root.fsPath,
-      (repository) =>
+      (repository, requestId) =>
         new CopilotConversation({
           cliPath: configuration.get<string>("cliPath", "copilot"),
           model: configuration.get<string>("model", "").trim(),
@@ -92,6 +92,7 @@ export function activate(context: vscode.ExtensionContext): void {
             const approved = await application.requestPermission(
               repository.id,
               describePermission(request, invocation.promptRequest),
+              requestId,
             );
             return approved && panel && vscode.workspace.isTrusted
               ? { kind: "approve-once" }
@@ -104,7 +105,7 @@ export function activate(context: vscode.ExtensionContext): void {
             if (!vscode.workspace.isTrusted || !panel) {
               throw new Error("The application is closed or untrusted.");
             }
-            return application.askQuestion(repository.id, request);
+            return application.askQuestion(repository.id, request, requestId);
           },
         }),
       () => {
@@ -203,7 +204,11 @@ export function activate(context: vscode.ExtensionContext): void {
               await application.select(message.id);
               break;
             case "send":
-              await application.send(message.id, message.question);
+              await application.send(
+                message.id,
+                message.question,
+                message.parallel,
+              );
               break;
             case "cancel":
               application.cancel(message.id);
