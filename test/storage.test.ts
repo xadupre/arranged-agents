@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
 import { ApplicationStorage, type SavedApplication } from "../src/storage";
+import { testImage } from "./helpers";
 
 async function setup(t: TestContext) {
   const directory = await mkdtemp(join(tmpdir(), "arranged-agents-storage-"));
@@ -38,12 +39,15 @@ test("history saves are atomic, serialized, private and isolated by launch root"
     role: "output",
     content: "Command failed",
     error: true,
+    images: [testImage],
   });
   snapshot.sessions[0]!.history = [
     {
       sessionId: "older-session",
       draft: "Older draft",
-      messages: [{ role: "user", content: "Earlier conversation" }],
+      messages: [
+        { role: "user", content: "Earlier conversation", images: [testImage] },
+      ],
     },
   ];
   const storage = new ApplicationStorage(directory, snapshot.root);
@@ -87,6 +91,21 @@ test("corrupt or mismatched history fails explicitly without overwriting the sav
     JSON.stringify({
       ...snapshot,
       sessions: [{ ...snapshot.sessions[0], postMortem: {} }],
+    }),
+    JSON.stringify({
+      ...snapshot,
+      sessions: [
+        {
+          ...snapshot.sessions[0],
+          messages: [
+            {
+              role: "user",
+              content: "bad",
+              images: [{ ...testImage, dataUrl: "file:///private.png" }],
+            },
+          ],
+        },
+      ],
     }),
     JSON.stringify({
       ...snapshot,

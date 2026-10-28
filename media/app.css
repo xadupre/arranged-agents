@@ -356,6 +356,27 @@ h2 {
   margin-bottom: 0;
 }
 
+.message img,
+#image-previews img {
+  display: block;
+  max-width: 100%;
+  max-height: 600px;
+  height: auto;
+  object-fit: contain;
+  margin: 8px 0;
+}
+
+#image-previews {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+#image-previews img {
+  max-width: 120px;
+  max-height: 80px;
+}
+
 .message pre.content {
   white-space: pre-wrap;
   overflow-wrap: anywhere;

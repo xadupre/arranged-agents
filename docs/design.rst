@@ -109,7 +109,10 @@ formats tool and permission descriptions without exposing JSON by default.
 The original one-shot helper is retained; the application
 and CLI smoke test use the persistent conversation implementation.
 
-``src/render.ts`` escapes HTML, blocks remote images and renders equations
+``src/images.ts`` validates bounded raster image attachments, which are sent as
+SDK blobs and retained in saved messages. Structured tool-result images are
+shown alongside escaped output text. ``src/render.ts`` escapes HTML, permits
+HTTPS and validated embedded raster images under the webview CSP, and renders equations
 using KaTeX's MathML output. ``src/webview.ts`` is the type-checked browser script;
 it updates the three panels and activity indicators, handles accessible panel
 dividers, keyboard submission and category filters, keeps drafts and posts commands

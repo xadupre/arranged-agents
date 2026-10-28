@@ -231,6 +231,7 @@ export function activate(context: vscode.ExtensionContext): void {
                 message.id,
                 message.question,
                 message.parallel,
+                message.images,
               );
               break;
             case "postmortem":

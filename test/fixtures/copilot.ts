@@ -5,6 +5,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { testImage } from "../helpers";
 
 interface Request {
   id?: number;
@@ -260,6 +261,64 @@ function handle(request: Request): void {
         }
       }
       if (crashIfRequested(request)) break;
+      if (scenario === "images") {
+        const image = {
+          type: "image",
+          mimeType: "image/png",
+          data: testImage.dataUrl.split(",")[1],
+        };
+        const asset = {
+          ...image,
+          mimeType: "image/jpeg",
+          assetId: "image-asset",
+          byteLength: 67,
+        };
+        notify(request.params?.sessionId, "session.binary_asset", asset);
+        notify(request.params?.sessionId, "tool.execution_complete", {
+          toolCallId: "image-tool",
+          success: true,
+          result: {
+            content: "Generated *image*, not Markdown",
+            contents: [
+              image,
+              { type: "image", mimeType: "image/svg+xml", data: "PHN2Zz4=" },
+            ],
+            binaryResultsForLlm: [
+              image,
+              { ...image, mimeType: "image/gif" },
+              {
+                type: "image",
+                assetId: asset.assetId,
+                mimeType: asset.mimeType,
+                byteLength: asset.byteLength,
+              },
+              {
+                type: "image",
+                assetId: "late-asset",
+                mimeType: "image/webp",
+                byteLength: asset.byteLength,
+              },
+              {
+                type: "image",
+                assetId: "invalid-asset",
+                mimeType: "image/svg+xml",
+                byteLength: 5,
+              },
+            ],
+          },
+        });
+        notify(request.params?.sessionId, "session.binary_asset", {
+          ...asset,
+          assetId: "late-asset",
+          mimeType: "image/webp",
+        });
+        notify(request.params?.sessionId, "session.binary_asset", {
+          ...asset,
+          assetId: "invalid-asset",
+          mimeType: "image/svg+xml",
+          data: "PHN2Zz4=",
+        });
+      }
       if (scenario === "events") {
         const sessionId = request.params?.sessionId;
         const messageId = `message-${prompts.length}`;

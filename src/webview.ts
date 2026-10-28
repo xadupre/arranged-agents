@@ -42,6 +42,11 @@ declare function acquireVsCodeApi(): {
   const questions = element("questions", HTMLElement);
   const questionCards = new Map<string, HTMLElement>();
   const question = element("question", HTMLTextAreaElement);
+  type ImageAttachment = import("./images").ImageAttachment;
+  const imageInput = element("images", HTMLInputElement);
+  const imagePreviews = element("image-previews", HTMLElement);
+  const imageDrafts = new Map<string, ImageAttachment[]>();
+  const readingImages = new Set<string>();
   const send = element("send", HTMLButtonElement);
   const parallel = element("parallel", HTMLButtonElement);
   const postMortem = element("postmortem", HTMLButtonElement);
@@ -204,7 +209,8 @@ declare function acquireVsCodeApi(): {
   window.addEventListener("blur", stopResize);
   updateDividers();
   let state: State | undefined;
-  let pending: { id: string; text: string } | undefined;
+  let pending:
+    { id: string; text: string; images?: ImageAttachment[] } | undefined;
   const drafts = new Map<string, string>();
   const statusLabels = {
     idle: "Not started",
@@ -229,7 +235,14 @@ declare function acquireVsCodeApi(): {
       repository?.status === "ready" || repository?.status === "busy";
     const submitting = pending !== undefined && pending.id === repository?.id;
     question.disabled = !ready || submitting;
-    send.disabled = !ready || submitting || !question.value.trim();
+    imageInput.disabled =
+      !ready || submitting || readingImages.has(repository?.id ?? "");
+    send.disabled =
+      !ready ||
+      submitting ||
+      readingImages.has(repository?.id ?? "") ||
+      (!question.value.trim() &&
+        !imageDrafts.get(repository?.id ?? "")?.length);
     postMortem.disabled =
       !repository ||
       submitting ||
@@ -276,6 +289,7 @@ declare function acquireVsCodeApi(): {
       const previous = previousRepositories.get(repository.id);
       if (previous && previous.generation !== repository.generation) {
         drafts.delete(repository.id);
+        imageDrafts.delete(repository.id);
       }
     }
     const switched = state?.activeId !== next.activeId || reset;
@@ -291,6 +305,8 @@ declare function acquireVsCodeApi(): {
     }
     if (switched) {
       question.value = drafts.get(state.activeId ?? "") ?? state.draft;
+      imageInput.value = "";
+      renderImagePreviews();
     }
     element("root", HTMLElement).textContent = state.root;
     const active = state.repositories.find(
@@ -1130,14 +1146,120 @@ declare function acquireVsCodeApi(): {
     parallel.setAttribute("aria-pressed", String(enabled));
     parallel.textContent = enabled ? "Parallel ON" : "Parallel OFF";
   });
+
+  function renderImagePreviews(): void {
+    imagePreviews.replaceChildren();
+    const id = state?.activeId;
+    for (const [index, attachment] of (
+      imageDrafts.get(id ?? "") ?? []
+    ).entries()) {
+      const preview = document.createElement("div");
+      const image = document.createElement("img");
+      image.src = attachment.dataUrl;
+      image.alt = attachment.name;
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = `Remove ${attachment.name}`;
+      remove.addEventListener("click", () => {
+        if (!id || readingImages.has(id)) return;
+        imageDrafts.get(id)?.splice(index, 1);
+        renderImagePreviews();
+        updateControls();
+      });
+      preview.append(image, remove);
+      imagePreviews.append(preview);
+    }
+  }
+
+  async function addImages(files: File[]): Promise<void> {
+    const id = state?.activeId;
+    if (!id || imageInput.disabled || !files.length) return;
+    const generation = state?.repositories.find(
+      (repo) => repo.id === id,
+    )?.generation;
+    const existing = imageDrafts.get(id) ?? [];
+    if (
+      existing.length + files.length > Number(imageInput.dataset.maxCount) ||
+      files.some(
+        (file) =>
+          !imageInput.accept.split(",").includes(file.type) ||
+          !file.size ||
+          file.size > Number(imageInput.dataset.maxBytes),
+      )
+    ) {
+      showError(
+        "Attach up to five PNG, JPEG, GIF or WebP images, at most 5 MiB each.",
+      );
+      return;
+    }
+    readingImages.add(id);
+    updateControls();
+    try {
+      const images = await Promise.all(
+        files.map(
+          (file) =>
+            new Promise<ImageAttachment>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onload = () =>
+                resolve({
+                  name: file.name.slice(0, 255) || "Image",
+                  dataUrl: String(reader.result),
+                });
+              reader.onerror = () =>
+                reject(new Error(`Could not read ${file.name}.`));
+              reader.onabort = () =>
+                reject(new Error(`Reading ${file.name} was cancelled.`));
+              reader.readAsDataURL(file);
+            }),
+        ),
+      );
+      const repository = state?.repositories.find((repo) => repo.id === id);
+      if (repository && repository.generation === generation) {
+        imageDrafts.set(id, [...existing, ...images]);
+        if (state?.activeId === id) {
+          renderImagePreviews();
+          showError();
+        }
+      }
+    } catch (error) {
+      if (state?.activeId === id) showError(String(error));
+    } finally {
+      readingImages.delete(id);
+      updateControls();
+    }
+  }
+
+  imageInput.addEventListener("change", () => {
+    const files = [...(imageInput.files ?? [])];
+    imageInput.value = "";
+    void addImages(files);
+  });
+  question.addEventListener("paste", (event) => {
+    const files = [...(event.clipboardData?.items ?? [])]
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file !== null);
+    if (files.length && !imageInput.disabled) {
+      event.preventDefault();
+      void addImages(files);
+    }
+  });
+
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
     if (send.disabled || !state?.activeId) {
       return;
     }
-    pending = { id: state.activeId, text: question.value };
+    const images = imageDrafts.get(state.activeId);
+    pending = {
+      id: state.activeId,
+      text: question.value,
+      ...(images?.length ? { images } : {}),
+    };
     question.value = "";
     drafts.delete(state.activeId);
+    imageDrafts.delete(state.activeId);
+    renderImagePreviews();
     updateControls();
     showError();
     vscode.postMessage({
@@ -1145,6 +1267,7 @@ declare function acquireVsCodeApi(): {
       id: state.activeId,
       question: pending.text,
       parallel: parallel.getAttribute("aria-pressed") === "true",
+      ...(pending.images ? { images: pending.images } : {}),
     });
   });
   question.addEventListener("keydown", (event) => {
@@ -1243,8 +1366,10 @@ declare function acquireVsCodeApi(): {
       } else if (event.data.type === "error") {
         if (pending && (!event.data.id || event.data.id === pending.id)) {
           drafts.set(pending.id, pending.text);
+          if (pending.images) imageDrafts.set(pending.id, pending.images);
           if (state?.activeId === pending.id) {
             question.value = pending.text;
+            renderImagePreviews();
           }
           vscode.postMessage({
             type: "draft",

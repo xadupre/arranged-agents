@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { ChatMessage } from "./application";
 import { parsePostMortem, type PostMortem } from "./postmortem";
+import { parseImages } from "./images";
 
 export interface SavedConversation {
   sessionId?: string;
@@ -73,6 +74,9 @@ function parseConversation(value: unknown): SavedConversation {
       agentId: message.agentId,
       details: message.details,
       error: message.error,
+      ...(message.images !== undefined
+        ? { images: parseImages(message.images) }
+        : {}),
     })),
     ...(postMortem ? { postMortem } : {}),
   };

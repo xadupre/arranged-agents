@@ -3,6 +3,14 @@ import MarkdownIt from "markdown-it";
 import math from "@vscode/markdown-it-katex";
 import { isExternalUrl } from "./links";
 import type { ChatMessage } from "./application";
+import {
+  IMAGE_MIME_TYPES,
+  isImageDataUrl,
+  isImageSource,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES,
+  type ImageAttachment,
+} from "./images";
 
 const markdown = new MarkdownIt({ html: false, linkify: true });
 markdown.use(math, {
@@ -14,7 +22,7 @@ markdown.use(math, {
   maxSize: 20,
   enableFencedBlocks: true,
 });
-markdown.validateLink = isExternalUrl;
+markdown.validateLink = (url) => isExternalUrl(url) || isImageDataUrl(url);
 markdown.renderer.rules.link_open = (
   tokens,
   index,
@@ -23,12 +31,27 @@ markdown.renderer.rules.link_open = (
   renderer,
 ) => {
   const token = tokens[index];
+  if (token && !isExternalUrl(token.attrGet("href") ?? "")) {
+    token.attrs = token.attrs?.filter(([name]) => name !== "href") ?? null;
+  }
   token?.attrSet("target", "_blank");
   token?.attrSet("rel", "noopener noreferrer");
   return renderer.renderToken(tokens, index, options);
 };
-markdown.renderer.rules.image = (tokens, index) =>
-  markdown.utils.escapeHtml(tokens[index]?.content ?? "");
+function renderImage(src: string, alt: string, title?: string | null): string {
+  const escape = markdown.utils.escapeHtml;
+  if (!isImageSource(src)) return escape(alt);
+  return `<img src="${escape(src)}" alt="${escape(alt)}"${title ? ` title="${escape(title)}"` : ""} loading="lazy" referrerpolicy="no-referrer">`;
+}
+
+markdown.renderer.rules.image = (tokens, index) => {
+  const token = tokens[index];
+  return renderImage(
+    token?.attrGet("src") ?? "",
+    token?.content ?? "",
+    token?.attrGet("title"),
+  );
+};
 
 export function renderMarkdown(content: string): string {
   return markdown.render(content);
@@ -53,6 +76,7 @@ export class ConversationRenderer {
   private cached: {
     role: ChatMessage["role"];
     content: string;
+    images: ImageAttachment[];
     html: string;
   }[] = [];
 
@@ -65,19 +89,35 @@ export class ConversationRenderer {
       this.activeId = activeId;
     }
     const rendered = messages.map((message, index) => {
+      const images = message.images ?? [];
       let cached = this.cached[index];
       if (
         !cached ||
         cached.role !== message.role ||
-        cached.content !== message.content
+        cached.content !== message.content ||
+        cached.images.length !== images.length ||
+        cached.images.some(
+          (image, index) =>
+            image.name !== images[index]?.name ||
+            image.dataUrl !== images[index]?.dataUrl,
+        )
       ) {
         cached = {
           role: message.role,
           content: message.content,
+          images: images.map((image) => ({ ...image })),
           html:
-            message.role === "assistant" || message.role === "reasoning"
+            (message.role === "assistant" || message.role === "reasoning"
               ? renderMarkdown(message.content)
-              : renderText(message.content),
+              : renderText(message.content)) +
+            (message.images ?? [])
+              .slice(0, MAX_IMAGES)
+              .map((image) =>
+                isImageDataUrl(image.dataUrl)
+                  ? renderImage(image.dataUrl, image.name)
+                  : "",
+              )
+              .join(""),
         };
         this.cached[index] = cached;
       }
@@ -100,7 +140,7 @@ export function renderApplication(resources: {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${escape(resources.cspSource)}; base-uri 'none'; form-action 'none';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; script-src 'nonce-${nonce}'; style-src ${escape(resources.cspSource)}; base-uri 'none'; form-action 'none';">
 <title>Arranged Agents</title>
 <link rel="stylesheet" href="${escape(resources.styleUri)}">
 </head>
@@ -160,6 +200,9 @@ export function renderApplication(resources: {
     <form id="composer">
       <label for="question">Message to Copilot</label>
       <textarea id="question" rows="4" maxlength="20000" placeholder="Select a repository to begin." disabled></textarea>
+      <label for="images">Attach images</label>
+      <input id="images" type="file" accept="${IMAGE_MIME_TYPES.join(",")}" multiple data-max-count="${MAX_IMAGES}" data-max-bytes="${MAX_IMAGE_BYTES}" disabled>
+      <div id="image-previews" aria-label="Attached images"></div>
       <div class="composer-actions">
         <span>Enter to send; Shift+Enter for a new line. Math: $x^2$ or $$E=mc^2$$</span>
         <button id="restart" type="button" title="Start fresh without replaying the displayed history" hidden>New session</button>
@@ -199,7 +242,7 @@ export function renderResult(question: string, answer: string): string {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}';">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src https: data:; style-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none';">
 <title>Arranged Agents</title>
 <style nonce="${nonce}">
 body { max-width: 900px; margin: 0 auto; padding: 24px; color: var(--vscode-editor-foreground); background: var(--vscode-editor-background); font-family: var(--vscode-font-family); line-height: 1.6; overflow-wrap: anywhere; }
@@ -209,6 +252,7 @@ code { font-family: var(--vscode-editor-font-family); }
 table { border-collapse: collapse; }
 th, td { padding: 8px; border: 1px solid var(--vscode-panel-border); }
 blockquote { border-left: 3px solid var(--vscode-textBlockQuote-border); margin-left: 0; padding-left: 16px; }
+img { display: block; max-width: 100%; max-height: 600px; height: auto; object-fit: contain; }
 </style>
 </head>
 <body>

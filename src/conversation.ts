@@ -13,6 +13,7 @@ import {
   DEFAULT_REQUEST_TIMEOUT_MS,
   type CopilotOptions,
 } from "./copilot";
+import { parseImages, type ImageAttachment } from "./images";
 
 const MAX_CRASH_RESTARTS = 3;
 
@@ -43,7 +44,11 @@ export interface Conversation {
     onEvent?: (event: SessionEvent) => void,
     sessionId?: string,
   ): Promise<void>;
-  send(prompt: string, signal: AbortSignal): Promise<string>;
+  send(
+    prompt: string,
+    signal: AbortSignal,
+    images?: ImageAttachment[],
+  ): Promise<string>;
   deleteSession(sessionId: string, signal: AbortSignal): Promise<void>;
   dispose(): Promise<void>;
 }
@@ -109,7 +114,22 @@ export class CopilotConversation implements Conversation {
     signal.throwIfAborted();
   }
 
-  async send(prompt: string, signal: AbortSignal): Promise<string> {
+  async send(
+    prompt: string,
+    signal: AbortSignal,
+    images?: ImageAttachment[],
+  ): Promise<string> {
+    const attachments = images?.length
+      ? parseImages(images).map((image) => {
+          const comma = image.dataUrl.indexOf(",");
+          return {
+            type: "blob" as const,
+            displayName: image.name,
+            mimeType: image.dataUrl.slice(5, comma).split(";")[0]!,
+            data: image.dataUrl.slice(comma + 1),
+          };
+        })
+      : undefined;
     if (!this.session || this.closed) {
       throw new Error("Select the repository to start its Copilot session.");
     }
@@ -125,6 +145,7 @@ export class CopilotConversation implements Conversation {
         if (!session) throw new Error("The Copilot session is not open.");
         const response = await session.sendAndWait(
           {
+            ...(attachments ? { attachments } : {}),
             prompt: recovering
               ? [
                   "The Copilot process disconnected while handling this request.",
