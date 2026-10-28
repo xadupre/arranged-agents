@@ -10,6 +10,12 @@ export async function run(): Promise<void> {
   assert.ok(extension.isActive);
   const commands = await vscode.commands.getCommands(true);
   assert.ok(commands.includes("arrangedAgents.ask"));
+  assert.ok(commands.includes("arrangedAgents.open"));
+  await vscode.commands.executeCommand("arrangedAgents.open");
+  const appTabOpened = vscode.window.tabGroups.all.some((group) =>
+    group.tabs.some((tab) => tab.label === "Arranged Agents"),
+  );
+  assert.ok(appTabOpened, "The application must open in an editor tab.");
   await writeFile(
     join(__dirname, "extension-host-smoke-result.json"),
     JSON.stringify({
@@ -18,6 +24,7 @@ export async function run(): Promise<void> {
       extensionPath: extension.extensionPath,
       activated: extension.isActive,
       commandRegistered: true,
+      appTabOpened,
     }),
   );
 }

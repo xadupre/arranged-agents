@@ -2,6 +2,11 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+WORKSPACE="$(cd -- "$ROOT/.." && pwd)"
+if [[ $# -gt 0 && "$1" != --* ]]; then
+    WORKSPACE="$(cd -- "$1" && pwd)"
+    shift
+fi
 cd -- "$ROOT"
 
 for tool in node npm code; do
@@ -36,11 +41,12 @@ fi
 
 if [[ ! -f node_modules/typescript/bin/tsc ||
       ! -f node_modules/@github/copilot-sdk/package.json ||
-      ! -f node_modules/markdown-it/package.json ]]; then
+      ! -f node_modules/markdown-it/package.json ||
+      ! -f node_modules/@vscode/markdown-it-katex/package.json ]]; then
     npm ci --omit=optional
 fi
 npm run compile
 
 exec env -u VSCODE_IPC_HOOK_CLI "$CODE" \
     --new-window --disable-extensions --extensionDevelopmentPath="$ROOT" \
-    "$@" "$ROOT"
+    "$@" "$WORKSPACE"

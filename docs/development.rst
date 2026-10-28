@@ -17,12 +17,15 @@ Local checks
 unit coverage is not evidence that the interactive VS Code UI has been tested.
 None of these commands sends a model request.
 
-``npm run smoke`` sends one real request through the authenticated local CLI
-and checks the result and Markdown renderer. It uses your Copilot allowance.
+``npm run smoke`` sends three real requests through the authenticated local CLI
+and checks the result, Markdown renderer and a file read in a temporary Git
+repository, including live tool execution/result events. It stops the CLI,
+resumes the same session in a new process and verifies the earlier context.
+It uses your Copilot allowance.
 Override the executable with ``ARRANGED_AGENTS_CLI_PATH`` if needed.
 
 Use **Test Arranged Agents activation** in the Run and Debug view for an F5
-activation check. A successful run writes host versions and the loaded extension
+activation/tab-opening check. A successful run writes host versions and the loaded extension
 path to ``dist/scripts/extension-host-smoke-result.json``. It tests the development
 extension, not VSIX installation.
 
@@ -31,12 +34,21 @@ Manual validation
 
 Install the packaged VSIX, then check:
 
-* Activation and **Arranged Agents: Ask Copilot** in a trusted workspace.
-* Question-only requests and explicit consent before including a selection.
-* Markdown headings, lists, tables and fenced code in the side panel.
-* Cancellation, concurrent commands, deactivation, missing/login-invalid CLI
-  and invalid models.
-* Blocking in an untrusted workspace and inactive HTML, links and images.
+* Automatic development-tab opening and **Arranged Agents: Open** after VSIX installation.
+* Empty left panel, repository list on the right and the chat in the center.
+* Pointer/keyboard panel resizing and activity icons during startup and generation.
+* Direct-child discovery, lazy startup and context isolation while switching repositories.
+* Repository file access, Git/GitHub queries and permission confirmation/rejection.
+* Enter to send, Shift+Enter for new lines, and live command/output visibility.
+* Category checkboxes hide/restore history without affecting execution or drafts.
+* Markdown, fenced code and inline/display equations, without remote math resources.
+* Cancellation, concurrent requests in different repositories, tab closure and deactivation.
+* Close/reopen history and draft restoration, lazy resume and interrupted-operation notices.
+* Missing CLI session recovery through an explicit **New session**, never a silent reset.
+* Visible persistence errors and no automatic rerun of interrupted commands on resume.
+* Missing/login-invalid CLI and invalid models, with visible errors and clean restart.
+* Blocking in an untrusted workspace, escaped HTML and blocked remote images.
+* HTTP/HTTPS links open externally; command, script and local-file links stay blocked.
 
 Building documentation
 -----------------------
@@ -98,3 +110,5 @@ are safe to update. The retained development-only Azure Identity/MSAL/UUID chain
 has moderate advisories; removing the Azure pin previously selected a high-severity
 MSAL dependency. Reassess with ``npm audit`` before changing it, and separately
 check production dependencies with ``npm audit --omit=dev --omit=optional``.
+The math plugin's transitive KaTeX is overridden to a patched 0.19 release.
+Its parser/rendering API is covered by equation and untrusted-command tests.

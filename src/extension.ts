@@ -1,127 +1,276 @@
 import * as vscode from "vscode";
-import { askCopilot } from "./copilot";
-import { buildPrompt, MAX_SELECTION_LENGTH, validateQuestion } from "./prompt";
-import { renderResult } from "./render";
+import { AgentApplication, parseApplicationMessage } from "./application";
+import { CopilotConversation } from "./conversation";
+import { renderApplication, renderMarkdown, renderText } from "./render";
+import { ApplicationStorage } from "./storage";
 
-let activeRequest: AbortController | undefined;
-let activeOperation: Promise<string> | undefined;
+let activePanel: vscode.WebviewPanel | undefined;
+let closeActiveApplication: (() => Promise<void>) | undefined;
+let opening: Promise<void> | undefined;
+let deactivating = false;
+const closing = new Set<Promise<void>>();
 
 export function activate(context: vscode.ExtensionContext): void {
+  deactivating = false;
   const output = vscode.window.createOutputChannel("Arranged Agents");
+  const report = (error: unknown): string => {
+    const message = error instanceof Error ? error.message : String(error);
+    output.appendLine(message);
+    return message;
+  };
+  const openApplication = async (): Promise<void> => {
+    if (!vscode.workspace.isTrusted) {
+      await vscode.window.showWarningMessage(
+        "Trust the workspace before running Arranged Agents.",
+      );
+      return;
+    }
+    if (activePanel) {
+      activePanel.reveal(vscode.ViewColumn.Active);
+      return;
+    }
+    await Promise.all([...closing]);
+    const root =
+      vscode.workspace.workspaceFolders?.[0]?.uri ??
+      (
+        await vscode.window.showOpenDialog({
+          title: "Choose the parent directory containing your Git repositories",
+          canSelectFolders: true,
+          canSelectFiles: false,
+          canSelectMany: false,
+        })
+      )?.[0];
+    if (!root || deactivating) {
+      return;
+    }
+    if (root.scheme !== "file") {
+      throw new Error(
+        "Arranged Agents requires a local directory in the extension host.",
+      );
+    }
+    const configuration = vscode.workspace.getConfiguration("arrangedAgents");
+    const storage = new ApplicationStorage(
+      context.globalStorageUri.fsPath,
+      root.fsPath,
+    );
+    const saved = await storage.load();
+    let saveTimer: ReturnType<typeof setTimeout> | undefined;
+    let stopping = false;
+    let stopped: Promise<void> | undefined;
+    const saveFailure = (error: unknown): void => {
+      void vscode.window.showErrorMessage(
+        `Arranged Agents could not save its history: ${report(error)}`,
+      );
+    };
+    const scheduleSave = (): void => {
+      if (!saveTimer && !stopping) {
+        saveTimer = setTimeout(() => {
+          saveTimer = undefined;
+          void storage.save(application.getSnapshot()).catch(saveFailure);
+        }, 300);
+      }
+    };
+    const application: AgentApplication = new AgentApplication(
+      root.fsPath,
+      (repository) =>
+        new CopilotConversation({
+          cliPath: configuration.get<string>("cliPath", "copilot"),
+          model: configuration.get<string>("model", "").trim(),
+          workingDirectory: repository.path,
+          onPermissionRequest: async (request, invocation) => {
+            if (!vscode.workspace.isTrusted || !panel) {
+              return {
+                kind: "reject",
+                feedback: "The application is closed or untrusted.",
+              };
+            }
+            const approved = await application.requestPermission(
+              repository.id,
+              request.kind,
+              JSON.stringify(invocation.promptRequest ?? request, null, 2),
+            );
+            return approved && panel && vscode.workspace.isTrusted
+              ? { kind: "approve-once" }
+              : {
+                  kind: "reject",
+                  feedback: "The user did not approve this operation.",
+                };
+          },
+        }),
+      () => {
+        publish();
+        scheduleSave();
+      },
+      saved,
+    );
+    const close = (): Promise<void> =>
+      (stopped ??= (async () => {
+        stopping = true;
+        clearTimeout(saveTimer);
+        try {
+          await application.dispose();
+        } finally {
+          await storage.save(application.getSnapshot());
+        }
+      })());
+    let panel: vscode.WebviewPanel | undefined;
+    const publish = (): void => {
+      if (!panel) {
+        return;
+      }
+      const state = application.getState();
+      void panel.webview.postMessage({
+        type: "state",
+        state: {
+          ...state,
+          messages: state.messages.map((message) => ({
+            ...message,
+            html:
+              message.role === "assistant" || message.role === "reasoning"
+                ? renderMarkdown(message.content)
+                : renderText(message.content),
+          })),
+        },
+      });
+    };
+    await application.refresh();
+    if (deactivating) {
+      await close();
+      return;
+    }
+    const media = vscode.Uri.joinPath(context.extensionUri, "media");
+    const scripts = vscode.Uri.joinPath(context.extensionUri, "dist", "src");
+    panel = vscode.window.createWebviewPanel(
+      "arrangedAgents.application",
+      "Arranged Agents",
+      vscode.ViewColumn.Active,
+      {
+        enableScripts: true,
+        localResourceRoots: [media, scripts],
+        retainContextWhenHidden: true,
+      },
+    );
+    activePanel = panel;
+    closeActiveApplication = close;
+    const currentPanel = panel;
+    const messageSubscription = panel.webview.onDidReceiveMessage(
+      async (value: unknown) => {
+        let repositoryId: string | undefined;
+        try {
+          if (!vscode.workspace.isTrusted) {
+            throw new Error(
+              "Trust the workspace before starting Copilot sessions.",
+            );
+          }
+          const message = parseApplicationMessage(value);
+          if ("id" in message) {
+            repositoryId = message.id;
+          }
+          switch (message.type) {
+            case "ready":
+              publish();
+              break;
+            case "refresh":
+              await application.refresh();
+              break;
+            case "select":
+              await application.select(message.id);
+              break;
+            case "send":
+              await application.send(message.id, message.question);
+              break;
+            case "cancel":
+              application.cancel(message.id);
+              break;
+            case "draft":
+              application.setDraft(message.id, message.text);
+              break;
+            case "permission":
+              application.respondToPermission(message.id, message.approve);
+              break;
+            case "restart":
+              await application.restart(message.id);
+              break;
+            case "openExternal":
+              if (
+                !(await vscode.env.openExternal(vscode.Uri.parse(message.url)))
+              ) {
+                throw new Error(`Could not open link: ${message.url}`);
+              }
+              break;
+          }
+        } catch (error) {
+          const message = report(error);
+          if (panel) {
+            const state = application.getState();
+            await panel.webview.postMessage({
+              type: "error",
+              id: state.repositories.some(
+                (repository) => repository.id === repositoryId,
+              )
+                ? repositoryId
+                : undefined,
+              message:
+                state.activeId === repositoryId && state.error
+                  ? state.error
+                  : message,
+            });
+          }
+        }
+      },
+    );
+    panel.onDidDispose(() => {
+      panel = undefined;
+      messageSubscription.dispose();
+      if (activePanel === currentPanel) {
+        activePanel = undefined;
+        closeActiveApplication = undefined;
+      }
+      const stop = close();
+      closing.add(stop);
+      void stop.then(
+        () => closing.delete(stop),
+        (error: unknown) => {
+          closing.delete(stop);
+          saveFailure(error);
+        },
+      );
+    });
+    panel.webview.html = renderApplication({
+      cspSource: panel.webview.cspSource,
+      scriptUri: panel.webview
+        .asWebviewUri(vscode.Uri.joinPath(scripts, "webview.js"))
+        .toString(),
+      styleUri: panel.webview
+        .asWebviewUri(vscode.Uri.joinPath(media, "app.css"))
+        .toString(),
+    });
+  };
+  const open = async (): Promise<void> => {
+    try {
+      opening ??= openApplication().finally(() => {
+        opening = undefined;
+      });
+      await opening;
+    } catch (error) {
+      await vscode.window.showErrorMessage(`Arranged Agents: ${report(error)}`);
+    }
+  };
   context.subscriptions.push(
     output,
-    vscode.commands.registerCommand("arrangedAgents.ask", async () => {
-      if (!vscode.workspace.isTrusted) {
-        await vscode.window.showWarningMessage(
-          "Trust the workspace before running Arranged Agents.",
-        );
-        return;
-      }
-      if (activeRequest) {
-        await vscode.window.showWarningMessage(
-          "A Copilot request is already running. Cancel it or wait for its answer.",
-        );
-        return;
-      }
-      const controller = new AbortController();
-      activeRequest = controller;
-      try {
-        const editor = vscode.window.activeTextEditor;
-        if (
-          editor &&
-          editor.document.offsetAt(editor.selection.end) -
-            editor.document.offsetAt(editor.selection.start) >
-            MAX_SELECTION_LENGTH
-        ) {
-          throw new Error(
-            "The selected text is too large. Select a smaller excerpt or clear the selection.",
-          );
-        }
-        const selection = editor?.document.getText(editor.selection);
-        const question = await vscode.window.showInputBox({
-          title: "Arranged Agents",
-          prompt: "What would you like Copilot to organize or explain?",
-          ignoreFocusOut: true,
-          validateInput: validateQuestion,
-        });
-        if (question === undefined) {
-          return;
-        }
-        let includedSelection: string | undefined;
-        if (selection) {
-          const choice = await vscode.window.showInformationMessage(
-            "Send the selected text to GitHub Copilot with your question?",
-            {
-              modal: true,
-              detail: "No other workspace files will be attached.",
-            },
-            "Include selection",
-            "Question only",
-          );
-          if (choice === undefined) {
-            return;
-          }
-          if (choice === "Include selection") {
-            includedSelection = selection;
-          }
-        }
-        const prompt = buildPrompt(question, includedSelection);
-        const configuration =
-          vscode.workspace.getConfiguration("arrangedAgents");
-        await vscode.workspace.fs.createDirectory(context.globalStorageUri);
-        const answer = await vscode.window.withProgress(
-          {
-            location: vscode.ProgressLocation.Notification,
-            title: "Arranged Agents: asking Copilot",
-            cancellable: true,
-          },
-          async (_progress, cancellation) => {
-            const subscription = cancellation.onCancellationRequested(() =>
-              controller.abort(),
-            );
-            if (cancellation.isCancellationRequested) {
-              controller.abort();
-            }
-            try {
-              activeOperation = askCopilot(prompt, {
-                cliPath: configuration.get<string>("cliPath", "copilot"),
-                model: configuration.get<string>("model", "").trim(),
-                workingDirectory: context.globalStorageUri.fsPath,
-                signal: controller.signal,
-              });
-              return await activeOperation;
-            } finally {
-              activeOperation = undefined;
-              subscription.dispose();
-            }
-          },
-        );
-        const panel = vscode.window.createWebviewPanel(
-          "arrangedAgents.result",
-          "Arranged Agents",
-          vscode.ViewColumn.Beside,
-          { enableScripts: false, localResourceRoots: [] },
-        );
-        panel.webview.html = renderResult(question, answer);
-      } catch (error) {
-        if (error instanceof Error && error.name === "AbortError") {
-          return;
-        }
-        const message = error instanceof Error ? error.message : String(error);
-        output.appendLine(message);
-        await vscode.window.showErrorMessage(
-          `Arranged Agents: ${message}. Check that your local Copilot CLI is installed and authenticated (copilot login).`,
-        );
-      } finally {
-        activeRequest = undefined;
-      }
-    }),
+    vscode.commands.registerCommand("arrangedAgents.open", open),
+    vscode.commands.registerCommand("arrangedAgents.ask", open),
+    { dispose: () => activePanel?.dispose() },
   );
+  if (context.extensionMode === vscode.ExtensionMode.Development) {
+    void open();
+  }
 }
 
 export async function deactivate(): Promise<void> {
-  activeRequest?.abort();
-  if (activeOperation) {
-    await Promise.allSettled([activeOperation]);
-  }
+  deactivating = true;
+  await Promise.all([
+    ...closing,
+    ...(closeActiveApplication ? [closeActiveApplication()] : []),
+  ]);
 }

@@ -4,30 +4,56 @@ Features and safeguards
 Current features
 ----------------
 
-* Ask one question and display one Markdown result panel per request.
-* Include the editor selection only after explicit consent.
+* Open a three-panel editor tab: empty left panel, chat center and repositories right.
+* Discover immediate child directories containing ``.git``, including worktrees.
+* Start each repository's session lazily when clicked.
+* Preserve independent conversation histories and drafts while switching repositories.
+* Render Markdown and inline/display LaTeX equations as HTML with native MathML.
 * Choose the CLI executable and model through VS Code settings.
 * Cancel a request and report visible CLI/model errors.
-* Reject concurrent requests until the current request finishes or is cancelled.
+* Reject concurrent requests within the same repository without blocking other sessions.
+* Show activity icons during startup and generation, including background sessions.
+* Resize panels by dragging their dividers or using the left/right arrow keys.
+* Inspect repository files and use Git/GitHub tools with explicit permission confirmation.
+* Send with Enter, insert new lines with Shift+Enter and open HTTP/HTTPS links.
+* Display live messages, commands, tool results, available reasoning and session events.
+* Toggle information categories above the chat without discarding history or affecting tools.
+* Save histories and drafts locally, stop on close and resume saved sessions lazily.
 
-Input limits are 20,000 characters for the trimmed question and 80,000 for a
-selection. Inputs are rejected rather than silently truncated.
+Messages are limited to 20,000 characters. The UI does not automatically include
+editor selections or file contents.
 
 Data boundaries
 ---------------
 
-No workspace files are attached automatically. Requests use the extension's
-global storage directory rather than the opened workspace as their working
-directory. Configuration discovery, file hooks, skills, on-demand instructions,
-session-store integration and host Git operations are disabled.
+No workspace files are attached automatically. Each clicked repository is the
+working directory of its own CLI client and session. Configuration discovery,
+skills, on-demand instructions and host Git context are enabled. The native
+Copilot system instructions are preserved; only response formatting guidance is
+appended. Repository file hooks and cross-session store integration stay disabled.
 
-Agent tools are disabled and permission requests are rejected. The extension
-cannot apply suggested edits or run suggested commands. Selected text is marked
-as reference data, not instructions; it is still sent to the model when approved.
+Built-in tools can read files, execute commands (including ``gh`` for pull
+requests) and edit files. Tool permission requests appear directly in the
+conversation panel with repository/operation details and **Allow once** / **Reject**
+choices. They do not open modal dialogs, issue notification sounds, take keyboard
+focus or disappear when display filters are unchecked. Requests from background
+repositories also remain visible. Cancellation or closure rejects pending requests;
+no automatic approval is granted. Relevant file/tool results may be sent to Copilot; normal CLI
+authentication and GitHub access rights apply.
 
-Results use a script-disabled webview with no local resource roots. Raw HTML is
-escaped, Markdown links become inactive text, and images are not loaded. A
-restrictive Content Security Policy blocks remote resources.
+The application's own script is authorized by a CSP nonce; model responses
+cannot introduce scripts. Raw HTML is escaped and images are not loaded.
+HTTP/HTTPS URLs open externally through VS Code after host-side validation;
+executable and local-file schemes are rejected. Tool output is escaped plain
+text with safe URL detection, not interpreted as Markdown or HTML.
+Math rendering disables trusted TeX commands.
+Only packaged UI resources are available, without remote fonts or scripts.
+
+The log displays events and readable reasoning supplied by the CLI; it cannot
+expose reasoning or tool information that the CLI does not emit. Raw tool event
+metadata is available under **Event details**, also hidden by the
+**Session / events** filter. Visibility filters only affect
+display, not execution, permissions or retained conversation context.
 
 Workspace Trust is required. The CLI's normal session persistence and GitHub's
 service-side policies still apply; disabling session-store integration is not a
@@ -36,19 +62,42 @@ promise that no CLI state is written.
 Lifecycle
 ---------
 
-The two-minute request deadline covers CLI startup, session creation, generation
-and graceful shutdown. Cancellation also works during these phases. A stalled
-CLI is forcibly terminated, and extension deactivation waits for an active CLI
-request to stop.
+Startup and each response have a two-minute deadline. Cancellation or an error
+stops that repository's CLI process; other repository sessions are unaffected.
+Click the stopped repository to start a fresh session. Earlier messages remain
+visible with a restart notice but are not replayed as context.
+
+Closing the tab, removing a repository from the refreshed list or deactivating
+the extension stops the affected clients, including requests still starting.
+Normal tab/window closure flushes the history and drafts after shutdown.
+
+Reopening with the same parent restores the selected repository, histories and
+drafts without launching any CLI process. Clicking a saved repository resumes
+the same SDK session and its model context. Interrupted operations are marked,
+not replayed; pending tools and permission prompts are not continued. A failed
+resume is reported rather than silently replaced with a new session. **New
+session** provides an explicit fresh start, retaining the visible transcript
+without sending that old transcript to the new model session.
+
+Versioned JSON snapshots are stored per parent in the extension's VS Code global
+storage with atomic, serialized writes. On POSIX, the directory is private and
+files use mode 0600. These files contain plaintext conversations, tool output and
+drafts; they are not encrypted, synced or included in the repository. Damaged or
+unsupported snapshots fail visibly instead of being silently discarded.
 
 Known limitations
 -----------------
 
-There is no conversation history UI, streaming answer display, automatic file
-context, editing agent or Marketplace publication.
+There are no automatic editor attachments or Marketplace publication. Model
+context resumption depends on the CLI's own saved session still being available.
+A crash can lose changes since the latest periodic save; normal closure flushes
+pending writes. Multiple windows sharing a parent use the same snapshot, with
+the last save taking precedence. Existing windows running an older extension
+version cannot migrate their in-memory transcripts automatically.
 
 Automated tests cover rendering, prompts and real SDK subprocess lifecycle
 using an explicit local CLI fixture. A real authenticated CLI model request and
 VSIX installation have passed locally. These checks do not replace interactive
-extension-host validation of consent dialogs, Workspace Trust, overlapping
-commands, deactivation and side-panel behavior. See :doc:`development`.
+extension-host validation of Workspace Trust, deactivation and visual layout.
+Application tests cover repository discovery and isolated persistent SDK sessions;
+DOM tests execute the compiled chat UI. See :doc:`development`.

@@ -27,8 +27,15 @@
     "virtualWorkspaces": false
   },
   "main": "./dist/src/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "contributes": {
     "commands": [
+      {
+        "command": "arrangedAgents.open",
+        "title": "Arranged Agents: Open"
+      },
       {
         "command": "arrangedAgents.ask",
         "title": "Arranged Agents: Ask Copilot"
@@ -66,16 +73,19 @@
   },
   "dependencies": {
     "@github/copilot-sdk": "1.0.27",
+    "@vscode/markdown-it-katex": "^1.1.2",
     "markdown-it": "^14.1.0"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.0",
     "@types/markdown-it": "^14.1.0",
+    "@types/jsdom": "^21.1.7",
     "@types/node": "^22.0.0",
     "@types/vscode": "1.105.0",
     "@vscode/vsce": "^4.0.0",
     "c8": "^12.0.0",
     "eslint": "^10.13.0",
+    "jsdom": "^27.4.0",
     "prettier": "^3.0.0",
     "typescript": "^5.9.3",
     "typescript-eslint": "^8.72.1"
@@ -86,6 +96,9 @@
     },
     "@vscode/vsce": {
       "@azure/identity": "4.13.0"
+    },
+    "@vscode/markdown-it-katex": {
+      "katex": "^0.19.1"
     }
   }
 }

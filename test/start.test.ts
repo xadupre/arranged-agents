@@ -11,7 +11,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { test, type TestContext } from "node:test";
 import { promisify } from "node:util";
 
@@ -65,6 +65,7 @@ async function setup(
       "typescript/bin/tsc",
       "@github/copilot-sdk/package.json",
       "markdown-it/package.json",
+      "@vscode/markdown-it-katex/package.json",
     ]) {
       const path = join(root, "node_modules", dependency);
       await mkdir(resolve(path, ".."), { recursive: true });
@@ -88,7 +89,7 @@ async function setup(
 }
 
 test(
-  "launcher chooses desktop Code, unsets the remote hook and builds from its own directory",
+  "launcher defaults to the checkout parent regardless of cwd and builds from its own directory",
   bashOnly,
   async (t) => {
     const launcher = await setup(t, { installed: true });
@@ -102,8 +103,21 @@ test(
         "--disable-extensions",
         `--extensionDevelopmentPath=${launcher.root}`,
         "--wait",
-        launcher.root,
+        dirname(launcher.root),
       ],
+    );
+  },
+);
+
+test(
+  "launcher opens an explicitly chosen parent directory rather than the source checkout",
+  bashOnly,
+  async (t) => {
+    const launcher = await setup(t, { installed: true });
+    await launcher.run(launcher.root, "--wait");
+    assert.deepEqual(
+      (await readFile(launcher.log, "utf8")).trim().split("\n").slice(-2),
+      ["--wait", launcher.root],
     );
   },
 );

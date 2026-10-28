@@ -1,11 +1,112 @@
 import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
+import math from "@vscode/markdown-it-katex";
+import { isExternalUrl } from "./links";
 
-const markdown = new MarkdownIt({ html: false, linkify: false });
-markdown.renderer.rules.link_open = () => "<span>";
-markdown.renderer.rules.link_close = () => "</span>";
+const markdown = new MarkdownIt({ html: false, linkify: true });
+markdown.use(math, {
+  output: "mathml",
+  trust: false,
+  strict: "error",
+  throwOnError: false,
+  maxExpand: 1_000,
+  maxSize: 20,
+  enableFencedBlocks: true,
+});
+markdown.validateLink = isExternalUrl;
+markdown.renderer.rules.link_open = (
+  tokens,
+  index,
+  options,
+  _env,
+  renderer,
+) => {
+  const token = tokens[index];
+  token?.attrSet("target", "_blank");
+  token?.attrSet("rel", "noopener noreferrer");
+  return renderer.renderToken(tokens, index, options);
+};
 markdown.renderer.rules.image = (tokens, index) =>
   markdown.utils.escapeHtml(tokens[index]?.content ?? "");
+
+export function renderMarkdown(content: string): string {
+  return markdown.render(content);
+}
+
+export function renderText(content: string): string {
+  const escape = markdown.utils.escapeHtml;
+  let html = "";
+  let offset = 0;
+  for (const match of markdown.linkify.match(content) ?? []) {
+    html += escape(content.slice(offset, match.index));
+    html += isExternalUrl(match.url)
+      ? `<a href="${escape(match.url)}" target="_blank" rel="noopener noreferrer">${escape(match.text)}</a>`
+      : escape(match.text);
+    offset = match.lastIndex;
+  }
+  return html + escape(content.slice(offset));
+}
+
+export function renderApplication(resources: {
+  cspSource: string;
+  scriptUri: string;
+  styleUri: string;
+}): string {
+  const nonce = randomUUID();
+  const escape = markdown.utils.escapeHtml;
+  return `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}'; style-src ${escape(resources.cspSource)}; base-uri 'none'; form-action 'none';">
+<title>Arranged Agents</title>
+<link rel="stylesheet" href="${escape(resources.styleUri)}">
+</head>
+<body>
+<main class="application">
+  <aside id="left-panel" aria-label="Reserved panel"></aside>
+  <div id="left-divider" class="divider" role="separator" aria-label="Resize left panel" aria-orientation="vertical" aria-controls="left-panel chat-panel" tabindex="0"></div>
+  <section id="chat-panel" aria-label="Copilot conversation">
+    <header class="chat-header">
+      <h1>Arranged Agents</h1>
+      <h2 id="active-repository">Select a repository on the right</h2>
+      <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span></p>
+      <fieldset id="information-filters">
+        <legend>Show information</legend>
+        <label><input type="checkbox" value="messages" checked> Messages</label>
+        <label><input type="checkbox" value="reasoning" checked> Reasoning</label>
+        <label><input type="checkbox" value="tools" checked> Commands / tools</label>
+        <label><input type="checkbox" value="output" checked> Output</label>
+        <label><input type="checkbox" value="system" checked> Session / events</label>
+      </fieldset>
+    </header>
+    <div id="messages" role="log" aria-label="Conversation" aria-live="polite"></div>
+    <section id="permissions" aria-label="Tool permissions" hidden></section>
+    <p id="error" role="alert" hidden></p>
+    <form id="composer">
+      <label for="question">Message to Copilot</label>
+      <textarea id="question" rows="4" maxlength="20000" placeholder="Select a repository to begin." disabled></textarea>
+      <div class="composer-actions">
+        <span>Enter to send; Shift+Enter for a new line. Math: $x^2$ or $$E=mc^2$$</span>
+        <button id="restart" type="button" title="Start fresh without replaying the displayed history" hidden>New session</button>
+        <button id="cancel" type="button" disabled>Cancel</button>
+        <button id="send" type="submit" disabled>Send</button>
+      </div>
+    </form>
+  </section>
+  <div id="right-divider" class="divider" role="separator" aria-label="Resize repository panel" aria-orientation="vertical" aria-controls="chat-panel repository-panel" tabindex="0"></div>
+  <aside id="repository-panel" aria-label="Repository sessions">
+    <header><h2>Repositories</h2><button id="refresh" type="button">Refresh</button></header>
+    <p id="root"></p>
+    <div id="repositories"></div>
+    <p class="repository-hint">Only direct child directories containing .git are listed. Click one to start its session.</p>
+  </aside>
+</main>
+<script nonce="${nonce}" src="${escape(resources.scriptUri)}"></script>
+</body>
+</html>`;
+}
 
 export function renderResult(question: string, answer: string): string {
   const nonce = randomUUID();
@@ -28,7 +129,7 @@ blockquote { border-left: 3px solid var(--vscode-textBlockQuote-border); margin-
 </head>
 <body>
 <header><h1>Arranged Agents</h1><p>${markdown.utils.escapeHtml(question)}</p></header>
-<main>${markdown.render(answer)}</main>
+<main>${renderMarkdown(answer)}</main>
 </body>
 </html>`;
 }

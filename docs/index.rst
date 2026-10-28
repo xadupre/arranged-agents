@@ -1,9 +1,16 @@
 Arranged Agents
 ===============
 
-Arranged Agents is a VS Code extension that sends a question to the locally
-installed GitHub Copilot CLI and presents the answer as structured Markdown
-beside the editor. It uses your existing Copilot login and allowance.
+.. image:: ../media/icon.svg
+   :alt: Arranged Agents icon
+   :width: 128px
+   :height: 128px
+
+Arranged Agents is a three-panel application in a VS Code editor tab. The left
+panel is reserved, the center contains a Copilot conversation with HTML and
+equations, and the right lists Git repositories directly beneath a chosen parent
+directory. A repository's independent session starts only when you click it.
+It uses the locally installed GitHub Copilot CLI, your existing login and allowance.
 
 The CLI runs locally, but model requests go to GitHub Copilot. This is not an
 offline model, and the extension is not an official GitHub product.

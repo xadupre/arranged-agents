@@ -3,8 +3,8 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, delimiter, dirname, join } from "node:path";
 import { test, type TestContext } from "node:test";
-import { setTimeout as delay } from "node:timers/promises";
 import { askCopilot, type CopilotOptions } from "../src/copilot";
+import { waitForRequest } from "./helpers";
 
 const fixture = join(__dirname, "fixtures", "copilot.js");
 
@@ -25,34 +25,7 @@ async function assertStopped(options: CopilotOptions): Promise<void> {
   assert.throws(() => process.kill(pid, 0), { code: "ESRCH" });
 }
 
-async function waitForRequest(
-  options: CopilotOptions,
-  method: string,
-): Promise<void> {
-  for (let attempt = 0; attempt < 300; attempt++) {
-    try {
-      const log = await readFile(
-        join(options.workingDirectory, "requests.jsonl"),
-        "utf8",
-      );
-      if (log.includes(`"method":"${method}"`)) {
-        return;
-      }
-    } catch (error) {
-      if (
-        !(error instanceof Error) ||
-        !("code" in error) ||
-        error.code !== "ENOENT"
-      ) {
-        throw error;
-      }
-    }
-    await delay(10);
-  }
-  assert.fail(`The CLI never received ${method}.`);
-}
-
-test("resolves the CLI through PATH and sends only the prompt with discovery disabled", async (t) => {
+test("resolves the CLI through PATH and preserves repository tools, Git context and native instructions", async (t) => {
   const options = await setup(t);
   const previousPath = process.env.PATH;
   process.env.PATH = `${dirname(fixture)}${delimiter}${previousPath ?? ""}`;
@@ -80,17 +53,24 @@ test("resolves the CLI through PATH and sends only the prompt with discovery dis
     (request) => request.method === "session.create",
   );
   assert.ok(create);
-  assert.deepEqual(create.params.availableTools, []);
+  assert.equal(create.params.workingDirectory, options.workingDirectory);
+  assert.equal(create.params.availableTools, undefined);
+  assert.equal(create.params.interactiveUser, true);
   for (const flag of [
     "enableConfigDiscovery",
-    "enableFileHooks",
     "enableHostGitOperations",
-    "enableSessionStore",
     "enableSkills",
     "enableOnDemandInstructionDiscovery",
   ]) {
+    assert.equal(create.params[flag], true, flag);
+  }
+  for (const flag of ["enableFileHooks", "enableSessionStore"]) {
     assert.equal(create.params[flag], false, flag);
   }
+  assert.equal(
+    (create.params.systemMessage as { mode: string }).mode,
+    "append",
+  );
   const send = requests.find(
     (request) => request.method === "session.sendAndWait",
   );
@@ -99,6 +79,29 @@ test("resolves the CLI through PATH and sends only the prompt with discovery dis
   assert.equal(send.params.attachments, undefined);
   await assertStopped(options);
 });
+
+for (const approve of [false, true]) {
+  test(`repository tool permission is ${approve ? "approved by the host" : "denied without a host confirmation"}`, async (t) => {
+    const options = await setup(t, "permission");
+    let confirmations = 0;
+    const answer = await askCopilot("Read the repository", {
+      ...options,
+      onPermissionRequest: approve
+        ? (request) => {
+            assert.equal(request.kind, "read");
+            confirmations++;
+            return { kind: "approve-once" };
+          }
+        : undefined,
+    });
+    assert.equal(
+      answer,
+      approve ? "Repository access approved" : "Repository access denied",
+    );
+    assert.equal(confirmations, approve ? 1 : 0);
+    await assertStopped(options);
+  });
+}
 
 for (const stage of [
   "connect",
@@ -116,7 +119,7 @@ for (const stage of [
     });
     const rejected = assert.rejects(result, { name: "AbortError" });
     try {
-      await waitForRequest(options, stage);
+      await waitForRequest(options.workingDirectory, stage);
     } finally {
       controller.abort();
       await rejected;

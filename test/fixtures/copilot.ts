@@ -1,4 +1,9 @@
-import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 
 interface Request {
   id?: number;
@@ -7,22 +12,53 @@ interface Request {
     sessionId?: string;
     model?: string;
     prompt?: string;
+    result?: { kind: string };
   };
 }
 
 const scenario = readFileSync("scenario", "utf8");
 writeFileSync("pid", String(process.pid));
 let buffer = Buffer.alloc(0);
+const prompts: string[] = [];
+let pendingSend: number | undefined;
+let eventSequence = 0;
+
+function notify(
+  sessionId: string | undefined,
+  type: string,
+  data: object,
+  agentId?: string,
+): void {
+  transmit({
+    jsonrpc: "2.0",
+    method: "session.event",
+    params: {
+      sessionId,
+      event: {
+        id: `event-${++eventSequence}`,
+        parentId: null,
+        timestamp: new Date().toISOString(),
+        type,
+        data,
+        ...(agentId ? { agentId } : {}),
+      },
+    },
+  });
+}
+
+function transmit(message: object): void {
+  const body = JSON.stringify(message);
+  process.stdout.write(
+    `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
+  );
+}
 
 function reply(id: number, result: unknown, error?: string): void {
-  const body = JSON.stringify({
+  transmit({
     jsonrpc: "2.0",
     id,
     ...(error ? { error: { code: -32000, message: error } } : { result }),
   });
-  process.stdout.write(
-    `Content-Length: ${Buffer.byteLength(body)}\r\n\r\n${body}`,
-  );
 }
 
 function handle(request: Request): void {
@@ -35,6 +71,14 @@ function handle(request: Request): void {
       reply(request.id, { protocolVersion: 3 });
       break;
     case "session.create":
+      if (scenario.startsWith("persist")) {
+        writeFileSync(`history-${request.params?.sessionId}.json`, "[]");
+      }
+      if (scenario === "events") {
+        notify(request.params?.sessionId, "session.start", {
+          context: { cwd: process.cwd() },
+        });
+      }
       reply(
         request.id,
         { sessionId: request.params?.sessionId },
@@ -45,13 +89,149 @@ function handle(request: Request): void {
             : undefined,
       );
       break;
+    case "session.resume": {
+      const filename = `history-${request.params?.sessionId}.json`;
+      if (scenario === "missing-resume" || !existsSync(filename)) {
+        reply(request.id, undefined, "Saved session not found.");
+        break;
+      }
+      const saved: string[] = JSON.parse(readFileSync(filename, "utf8"));
+      prompts.push(...saved);
+      reply(request.id, { sessionId: request.params?.sessionId });
+      break;
+    }
     case "session.sendAndWait":
+      if (scenario === "permission") {
+        pendingSend = request.id;
+        transmit({
+          jsonrpc: "2.0",
+          method: "session.event",
+          params: {
+            sessionId: request.params?.sessionId,
+            event: {
+              id: "permission-event",
+              parentId: null,
+              timestamp: new Date().toISOString(),
+              type: "permission.requested",
+              data: {
+                requestId: "permission-request",
+                permissionRequest: { kind: "read", path: "README.md" },
+              },
+            },
+          },
+        });
+        break;
+      }
+      prompts.push(request.params?.prompt ?? "");
+      if (scenario.startsWith("persist")) {
+        writeFileSync(
+          `history-${request.params?.sessionId}.json`,
+          JSON.stringify(prompts),
+        );
+        if (scenario === "persist-hang") {
+          break;
+        }
+      }
+      if (scenario === "events") {
+        const sessionId = request.params?.sessionId;
+        const messageId = `message-${prompts.length}`;
+        notify(sessionId, "user.message", { content: request.params?.prompt });
+        notify(sessionId, "assistant.reasoning_delta", {
+          reasoningId: messageId,
+          deltaContent: "Inspect ",
+        });
+        notify(sessionId, "assistant.reasoning_delta", {
+          reasoningId: messageId,
+          deltaContent: "the repository.",
+        });
+        notify(sessionId, "assistant.reasoning", {
+          reasoningId: messageId,
+          content: "Inspect the repository.",
+        });
+        notify(sessionId, "tool.execution_start", {
+          toolCallId: messageId,
+          toolName: "bash",
+          arguments: { command: "gh pr list\nprintf done" },
+        });
+        notify(sessionId, "tool.shell_output", {
+          toolCallId: messageId,
+          stream: "stdout",
+          sequence: 0,
+          text: "first\n",
+        });
+        notify(sessionId, "tool.shell_output", {
+          toolCallId: messageId,
+          stream: "stderr",
+          sequence: 1,
+          text: "warning\n",
+        });
+        notify(sessionId, "tool.shell_output", {
+          toolCallId: messageId,
+          stream: "stdout",
+          sequence: 2,
+          text: "second\n",
+        });
+        notify(sessionId, "tool.execution_complete", {
+          toolCallId: messageId,
+          success: true,
+          result: { content: "first\nsecond\nwarning" },
+        });
+        notify(sessionId, "tool.execution_complete", {
+          toolCallId: "failed-command",
+          success: false,
+          error: { message: "Command failed" },
+        });
+        notify(sessionId, "assistant.message_start", { messageId });
+        notify(sessionId, "assistant.message_delta", {
+          messageId,
+          deltaContent: "## Fixture ",
+        });
+        notify(sessionId, "assistant.message_delta", {
+          messageId,
+          deltaContent: "answer",
+        });
+        notify(sessionId, "assistant.message", {
+          messageId,
+          content: "## Fixture answer",
+        });
+        notify(
+          sessionId,
+          "assistant.message",
+          { messageId, content: "Subagent answer" },
+          "child-agent",
+        );
+      }
       reply(request.id, {
         response: {
           type: "assistant.message",
-          data: { content: scenario === "empty" ? " " : "## Fixture answer" },
+          data: {
+            content:
+              scenario === "empty"
+                ? " "
+                : scenario === "conversation" || scenario.startsWith("persist")
+                  ? `## Fixture answer\n\n${prompts.join("\n\n")}`
+                  : "## Fixture answer",
+          },
         },
       });
+      break;
+    case "session.permissions.handlePendingPermissionRequest":
+      reply(request.id, { success: true });
+      if (pendingSend === undefined) {
+        throw new Error("Permission decision without a pending request.");
+      }
+      reply(pendingSend, {
+        response: {
+          type: "assistant.message",
+          data: {
+            content:
+              request.params?.result?.kind === "approve-once"
+                ? "Repository access approved"
+                : "Repository access denied",
+          },
+        },
+      });
+      pendingSend = undefined;
       break;
     case "session.detach":
       reply(request.id, { success: true });

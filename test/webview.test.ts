@@ -1,0 +1,579 @@
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { test, type TestContext } from "node:test";
+import { Script } from "node:vm";
+import { JSDOM } from "jsdom";
+import type { ApplicationMessage, ApplicationState } from "../src/application";
+import { renderApplication, renderMarkdown, renderText } from "../src/render";
+
+async function setup(t: TestContext) {
+  const posted: ApplicationMessage[] = [];
+  const dom = new JSDOM(
+    renderApplication({
+      cspSource: "https://webview.invalid",
+      scriptUri: "https://webview.invalid/webview.js",
+      styleUri: "https://webview.invalid/app.css",
+    }),
+    { runScripts: "outside-only" },
+  );
+  t.after(() => dom.window.close());
+  Object.defineProperty(dom.window, "acquireVsCodeApi", {
+    value: () => ({
+      postMessage: (message: ApplicationMessage) =>
+        posted.push(structuredClone(message)),
+    }),
+  });
+  const scriptPath = join(__dirname, "../src/webview.js");
+  new Script(await readFile(scriptPath, "utf8"), {
+    filename: scriptPath,
+  }).runInContext(dom.getInternalVMContext());
+  const publish = (state: ApplicationState): void => {
+    dom.window.dispatchEvent(
+      new dom.window.MessageEvent("message", {
+        data: {
+          type: "state",
+          state: {
+            ...state,
+            messages: state.messages.map((message) => ({
+              ...message,
+              html:
+                message.role === "assistant" || message.role === "reasoning"
+                  ? renderMarkdown(message.content)
+                  : renderText(message.content),
+            })),
+          },
+        },
+      }),
+    );
+  };
+  const state: ApplicationState = {
+    root: "/projects",
+    draft: "",
+    repositories: [
+      { id: "alpha", path: "/projects/alpha", name: "Alpha", status: "idle" },
+      { id: "beta", path: "/projects/beta", name: "Beta", status: "idle" },
+    ],
+    messages: [],
+    permissions: [],
+  };
+  const document = dom.window.document;
+  return { dom, document, posted, publish, state };
+}
+
+test("the tab has an empty left panel and starts no session until a repository is clicked", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  assert.equal(
+    document.querySelectorAll(".application > aside, .application > section")
+      .length,
+    3,
+  );
+  assert.equal(document.querySelectorAll('[role="separator"]').length, 2);
+  assert.equal(document.getElementById("left-panel")?.children.length, 0);
+  assert.deepEqual(posted, [{ type: "ready" }]);
+  publish(state);
+  assert.equal(
+    document.querySelector<HTMLTextAreaElement>("#question")?.disabled,
+    true,
+  );
+  document.querySelector<HTMLButtonElement>(".repository")?.click();
+  assert.deepEqual(posted, [
+    { type: "ready" },
+    { type: "select", id: "alpha" },
+  ]);
+});
+
+test("activity icons follow startup and generation independently for each repository", async (t) => {
+  const { document, publish, state } = await setup(t);
+  const icon = document.getElementById("activity-icon");
+  assert.ok(icon);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "starting";
+  state.repositories[1]!.status = "busy";
+  publish(state);
+  assert.equal(icon.hidden, false);
+  assert.equal(document.querySelectorAll(".repository .spinner").length, 2);
+  assert.equal(
+    document.getElementById("chat-panel")?.getAttribute("aria-busy"),
+    "true",
+  );
+  state.repositories[0]!.status = "ready";
+  publish(state);
+  assert.equal(icon.hidden, true);
+  assert.equal(document.querySelectorAll(".repository .spinner").length, 1);
+  state.repositories[1]!.status = "error";
+  state.activeId = "beta";
+  publish(state);
+  assert.equal(icon.hidden, true);
+  assert.equal(document.querySelectorAll(".repository .spinner").length, 0);
+});
+
+test("both panel dividers resize with pointer and keyboard while preserving positive panel widths", async (t) => {
+  const { dom, document } = await setup(t);
+  const layout = document.querySelector<HTMLElement>(".application");
+  const left = document.getElementById("left-divider");
+  const right = document.getElementById("right-divider");
+  assert.ok(layout && left && right);
+  // jsdom has no layout engine; supply only the container's measured width.
+  Object.defineProperty(layout, "clientWidth", { value: 1012 });
+  const pointer = (
+    target: EventTarget,
+    type: string,
+    x: number,
+    id = 1,
+  ): void => {
+    const event = new dom.window.MouseEvent(type, {
+      clientX: x,
+      button: 0,
+      bubbles: true,
+    });
+    Object.defineProperty(event, "pointerId", { value: id });
+    target.dispatchEvent(event);
+  };
+  const widths = (): number[] =>
+    layout.style.gridTemplateColumns
+      .split(" ")
+      .filter((part) => part.endsWith("fr"))
+      .map(parseFloat);
+  pointer(left, "pointerdown", 100);
+  pointer(document, "pointermove", 180, 2);
+  assert.equal(layout.style.gridTemplateColumns, "");
+  pointer(document, "pointermove", 180);
+  const afterLeft = widths();
+  assert.ok(afterLeft[0]! > 0.2);
+  assert.equal(document.body.classList.contains("resizing"), true);
+  pointer(document, "pointerup", 180);
+  pointer(document, "pointermove", 250);
+  assert.deepEqual(widths(), afterLeft);
+  assert.equal(document.body.classList.contains("resizing"), false);
+  right.dispatchEvent(
+    new dom.window.KeyboardEvent("keydown", {
+      key: "ArrowLeft",
+      cancelable: true,
+    }),
+  );
+  assert.ok(widths()[2]! > afterLeft[2]!);
+  pointer(right, "pointerdown", 800);
+  pointer(document, "pointermove", 100_000);
+  assert.ok(widths().every((width) => width > 0));
+  assert.ok(
+    Math.abs(widths().reduce((sum, width) => sum + width, 0) - 1) < 1e-10,
+  );
+  dom.window.dispatchEvent(new dom.window.Event("blur"));
+  assert.equal(document.body.classList.contains("resizing"), false);
+  assert.notEqual(left.getAttribute("aria-valuenow"), null);
+});
+
+test("chat sends to the selected repository, blocks double submission and renders safe HTML equations", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  const alpha = state.repositories[0];
+  assert.ok(alpha);
+  alpha.status = "ready";
+  state.activeId = "alpha";
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  const form = document.getElementById("composer");
+  assert.ok(question && form);
+  question.value = "Explain $x^2$.";
+  question.dispatchEvent(new dom.window.Event("input"));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    form.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  }
+  assert.deepEqual(
+    posted.filter((message) => message.type === "send"),
+    [{ type: "send", id: "alpha", question: "Explain $x^2$." }],
+  );
+  assert.equal(document.getElementById("activity-icon")?.hidden, false);
+  alpha.status = "busy";
+  state.messages = [{ role: "user", content: "<script>untrusted</script>" }];
+  publish(state);
+  document.querySelector<HTMLButtonElement>("#cancel")?.click();
+  assert.deepEqual(posted.at(-1), { type: "cancel", id: "alpha" });
+  alpha.status = "ready";
+  state.messages.push({
+    role: "assistant",
+    content:
+      "## Equation\n\n$$x^2=4$$\n\n[Link](https://example.com)\n<script>bad()</script>",
+  });
+  publish(state);
+  assert.equal(document.getElementById("activity-icon")?.hidden, true);
+  assert.ok(document.querySelector("#messages h2"));
+  assert.ok(document.querySelector("#messages math"));
+  assert.equal(document.querySelector("#messages script, #messages img"), null);
+  assert.match(
+    document.querySelector(".message.user")?.textContent ?? "",
+    /<script>untrusted/,
+  );
+});
+
+test("Enter sends once, Shift+Enter inserts a newline, and IME composition is not submitted", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.repositories[0]!.status = "ready";
+  state.activeId = "alpha";
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  assert.ok(question);
+  question.value = "First line\nSecond line";
+  for (const options of [
+    { shiftKey: true },
+    { isComposing: true },
+    { keyCode: 229 },
+  ]) {
+    const event = new dom.window.KeyboardEvent("keydown", {
+      key: "Enter",
+      cancelable: true,
+      ...options,
+    });
+    question.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  assert.equal(posted.filter((message) => message.type === "send").length, 0);
+  const enter = (): KeyboardEvent =>
+    new dom.window.KeyboardEvent("keydown", { key: "Enter", cancelable: true });
+  const event = enter();
+  question.dispatchEvent(event);
+  question.dispatchEvent(enter());
+  assert.equal(event.defaultPrevented, true);
+  assert.deepEqual(
+    posted.filter((message) => message.type === "send"),
+    [{ type: "send", id: "alpha", question: "First line\nSecond line" }],
+  );
+  state.repositories[0]!.status = "busy";
+  publish(state);
+  question.value = "Do not send while busy";
+  question.dispatchEvent(enter());
+  assert.equal(posted.filter((message) => message.type === "send").length, 1);
+});
+
+test("clicking rendered URLs asks the extension to open the browser without webview navigation", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.messages = [
+    {
+      role: "assistant",
+      content:
+        "[**GitHub**](https://github.com/xadupre/arranged-agents)\n\nhttps://example.com",
+    },
+  ];
+  publish(state);
+  const link = document.querySelector("#messages a strong");
+  assert.ok(link);
+  const click = new dom.window.MouseEvent("click", {
+    bubbles: true,
+    cancelable: true,
+  });
+  link.dispatchEvent(click);
+  assert.equal(click.defaultPrevented, true);
+  assert.deepEqual(posted.at(-1), {
+    type: "openExternal",
+    url: "https://github.com/xadupre/arranged-agents",
+  });
+  const middle = new dom.window.MouseEvent("auxclick", {
+    bubbles: true,
+    cancelable: true,
+    button: 1,
+  });
+  link.dispatchEvent(middle);
+  assert.equal(middle.defaultPrevented, true);
+  state.messages.push({
+    role: "output",
+    content: "Result: https://example.org/output\n<script>untrusted</script>",
+  });
+  publish(state);
+  assert.equal(
+    document.querySelector(".message.output a")?.getAttribute("href"),
+    "https://example.org/output",
+  );
+  assert.equal(document.querySelector(".message.output script"), null);
+});
+
+test("all information is visible by default and category filters only change display", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  state.repositories[0]!.status = "ready";
+  state.activeId = "alpha";
+  state.messages = [
+    { role: "user", content: "Question" },
+    { role: "assistant", content: "Answer" },
+    { role: "reasoning", content: "Runtime reasoning" },
+    {
+      role: "tool",
+      content: "gh pr list\n<script>not HTML</script>",
+      title: "Tool: bash",
+      details: '{"command":"gh pr list"}',
+    },
+    { role: "output", content: "stdout\nstderr" },
+    { role: "system", content: '{"status":"running"}' },
+  ];
+  publish(state);
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 6);
+  assert.equal(
+    document.querySelectorAll("#information-filters input:checked").length,
+    5,
+  );
+  assert.equal(document.querySelector(".message.tool script"), null);
+  assert.match(
+    document.querySelector(".message.tool pre")?.textContent ?? "",
+    /<script>not HTML/,
+  );
+  assert.equal(
+    document.querySelector(".message.output pre")?.textContent,
+    "stdout\nstderr",
+  );
+  const details = document.querySelector<HTMLDetailsElement>(
+    ".message.tool details",
+  );
+  assert.ok(details);
+  details.open = true;
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  assert.ok(question);
+  question.value = "Keep this draft";
+  for (const category of [
+    "tools",
+    "output",
+    "reasoning",
+    "system",
+    "messages",
+  ]) {
+    const filter = document.querySelector<HTMLInputElement>(
+      `#information-filters input[value="${category}"]`,
+    );
+    assert.ok(filter);
+    filter.click();
+  }
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 0);
+  assert.equal(question.value, "Keep this draft");
+  publish(state);
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 0);
+  assert.equal(
+    document.querySelector<HTMLDetailsElement>(".message.tool details")?.open,
+    true,
+  );
+  state.activeId = "beta";
+  state.messages = [{ role: "tool", content: "Other repository command" }];
+  publish(state);
+  assert.equal(
+    document.querySelector(".message.tool")?.hasAttribute("hidden"),
+    true,
+  );
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="tools"]',
+    )
+    ?.click();
+  assert.equal(
+    document.querySelector(".message.tool")?.hasAttribute("hidden"),
+    false,
+  );
+  assert.deepEqual(posted, [{ type: "ready" }]);
+});
+
+test("Session / events also hides raw event details without hiding tools or output", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  state.messages = [
+    { role: "assistant", content: "Checking the repository." },
+    {
+      role: "tool",
+      content: "gh pr list",
+      details: '{"toolCallId":"call-1","command":"gh pr list"}',
+    },
+    {
+      role: "output",
+      content: "No pull requests found",
+      details: '{"toolCallId":"call-1","success":true}',
+    },
+    { role: "system", content: "Session ready" },
+  ];
+  publish(state);
+  const filter = document.querySelector<HTMLInputElement>(
+    '#information-filters input[value="system"]',
+  );
+  const toolDetails = document.querySelector<HTMLDetailsElement>(
+    ".message.tool details",
+  );
+  assert.ok(filter && toolDetails);
+  toolDetails.open = true;
+  assert.equal(document.querySelectorAll("details:not([hidden])").length, 2);
+  filter.click();
+  for (let update = 0; update < 2; update++) {
+    assert.equal(document.querySelectorAll("details:not([hidden])").length, 0);
+    assert.equal(document.querySelectorAll(".message:not([hidden])").length, 3);
+    assert.equal(
+      document.querySelector(".message.tool .content")?.textContent,
+      "gh pr list",
+    );
+    assert.equal(
+      document.querySelector(".message.output .content")?.textContent,
+      "No pull requests found",
+    );
+    publish(state);
+  }
+  filter.click();
+  assert.equal(document.querySelectorAll("details:not([hidden])").length, 2);
+  const restored = document.querySelector<HTMLDetailsElement>(
+    ".message.tool details",
+  );
+  assert.equal(restored?.open, true);
+  assert.equal(
+    restored?.querySelector("pre")?.textContent,
+    state.messages[1]!.details,
+  );
+  assert.equal(document.querySelectorAll(".message:not([hidden])").length, 4);
+  assert.deepEqual(posted, [{ type: "ready" }]);
+});
+
+test("inline permission controls remain visible across filters and repository changes without grabbing focus", async (t) => {
+  const { document, posted, publish, state } = await setup(t);
+  state.repositories[0]!.status = "ready";
+  state.activeId = "alpha";
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  const permissions = document.getElementById("permissions");
+  assert.ok(question && permissions);
+  question.focus();
+  assert.equal(permissions.hidden, true);
+  state.permissions = [
+    {
+      id: "alpha-read",
+      repositoryId: "alpha",
+      kind: "read",
+      details: "<script>not executable</script>\nREADME.md",
+    },
+    {
+      id: "beta-shell",
+      repositoryId: "beta",
+      kind: "shell",
+      details: "gh pr list",
+    },
+  ];
+  publish(state);
+  assert.equal(document.activeElement, question);
+  assert.equal(permissions.hidden, false);
+  assert.equal(
+    permissions.closest('[aria-live], [role="alert"], [role="dialog"]'),
+    null,
+  );
+  assert.equal(permissions.querySelector("script"), null);
+  assert.match(permissions.textContent ?? "", /<script>not executable/);
+  assert.match(permissions.textContent ?? "", /Copilot \(Alpha\): allow read/);
+  assert.match(permissions.textContent ?? "", /Copilot \(Beta\): allow shell/);
+  for (const filter of document.querySelectorAll<HTMLInputElement>(
+    "#information-filters input",
+  )) {
+    filter.click();
+  }
+  assert.equal(permissions.hidden, false);
+  const allow = permissions.querySelector<HTMLButtonElement>("button");
+  assert.ok(allow);
+  allow.focus();
+  state.activeId = "beta";
+  publish(state);
+  assert.equal(document.activeElement, allow);
+  assert.deepEqual(posted, [{ type: "ready" }]);
+  allow.click();
+  allow.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "permission",
+    id: "alpha-read",
+    approve: true,
+  });
+  assert.equal(
+    permissions.querySelectorAll(".permission:first-child button:disabled")
+      .length,
+    2,
+  );
+  publish(state);
+  assert.equal(allow.disabled, true);
+  state.permissions.shift();
+  publish(state);
+  const reject =
+    permissions.querySelector<HTMLButtonElement>("button:last-child");
+  assert.ok(reject);
+  reject.click();
+  assert.deepEqual(posted.at(-1), {
+    type: "permission",
+    id: "beta-shell",
+    approve: false,
+  });
+  assert.equal(
+    posted.filter((message) => message.type === "permission").length,
+    2,
+  );
+  state.permissions = [];
+  publish(state);
+  assert.equal(permissions.hidden, true);
+  assert.equal(permissions.children.length, 0);
+});
+
+test("repository switching keeps drafts separate and failed submissions remain editable", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.repositories.forEach((repository) => {
+    repository.status = "ready";
+  });
+
+  state.activeId = "alpha";
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  const form = document.getElementById("composer");
+  assert.ok(question && form);
+  question.value = "Alpha draft";
+  state.activeId = "beta";
+  publish(state);
+  assert.equal(question.value, "");
+  question.value = "Beta draft";
+  state.activeId = "alpha";
+  publish(state);
+  assert.equal(question.value, "Alpha draft");
+  question.dispatchEvent(new dom.window.Event("input"));
+  form.dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { type: "error", id: "beta", message: "Other session failed" },
+    }),
+  );
+  assert.equal(question.value, "");
+  assert.equal(document.getElementById("error")?.hidden, true);
+  dom.window.dispatchEvent(
+    new dom.window.MessageEvent("message", {
+      data: { type: "error", message: "Session unavailable" },
+    }),
+  );
+  assert.equal(question.value, "Alpha draft");
+  assert.equal(document.getElementById("error")?.hidden, false);
+  assert.equal(
+    document.getElementById("error")?.textContent,
+    "Session unavailable",
+  );
+});
+
+test("saved drafts restore without starting Copilot, edits are persisted and failed resumes offer an explicit fresh session", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.draft = "A draft from the previous window";
+  state.repositories[0]!.status = "saved";
+  state.repositories[0]!.hasSavedSession = true;
+  state.messages = [{ role: "user", content: "An earlier question" }];
+  publish(state);
+  const question = document.querySelector<HTMLTextAreaElement>("#question");
+  assert.ok(question);
+  assert.equal(question.value, state.draft);
+  assert.equal(question.disabled, true);
+  assert.deepEqual(posted, [{ type: "ready" }]);
+  document.querySelector<HTMLButtonElement>(".repository")?.click();
+  assert.deepEqual(posted.at(-1), { type: "select", id: "alpha" });
+  state.repositories[0]!.status = "ready";
+  publish(state);
+  question.value = "Updated draft";
+  question.dispatchEvent(new dom.window.Event("input"));
+  assert.deepEqual(posted.at(-1), {
+    type: "draft",
+    id: "alpha",
+    text: "Updated draft",
+  });
+  state.repositories[0]!.status = "error";
+  state.error = "Could not resume";
+  publish(state);
+  const restart = document.querySelector<HTMLButtonElement>("#restart");
+  assert.ok(restart);
+  assert.equal(restart.hidden, false);
+  restart.click();
+  assert.deepEqual(posted.at(-1), { type: "restart", id: "alpha" });
+});
