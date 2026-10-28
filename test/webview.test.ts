@@ -1049,6 +1049,202 @@ test("both panel dividers resize with pointer and keyboard while preserving posi
   assert.notEqual(left.getAttribute("aria-valuenow"), null);
 });
 
+test("long transcripts preserve unchanged nodes and scroll position during updates and resizing", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.messages = Array.from({ length: 300 }, (_, index) => ({
+    role: "assistant",
+    content: `## Message ${index}\n\nSome content with $x^2$.`,
+  }));
+  state.messages.push({
+    role: "tool",
+    content: "Run tests",
+    details: '{"command":"npm test"}',
+  });
+  publish(state);
+  const transcript = document.getElementById("messages")!;
+  const articles = [...transcript.children];
+  const details = transcript.querySelector("details")!;
+  details.open = true;
+  Object.defineProperties(transcript, {
+    scrollHeight: { value: 30_000 },
+    clientHeight: { value: 600 },
+  });
+  transcript.scrollTop = 500;
+  const observer = new dom.window.MutationObserver(() => {});
+  observer.observe(transcript, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+  });
+  publish(state);
+  dom.window.dispatchEvent(new dom.window.Event("resize"));
+  assert.equal(observer.takeRecords().length, 0);
+  assert.equal(transcript.scrollTop, 500);
+
+  state.messages[299]!.content += "\n\nStreaming continuation";
+  state.messages.push({ role: "assistant", content: "New response" });
+  publish(state);
+  for (let index = 0; index < 299; index++) {
+    assert.equal(transcript.children[index], articles[index]);
+  }
+  assert.notEqual(transcript.children[299], articles[299]);
+  assert.match(
+    transcript.children[299]!.textContent ?? "",
+    /Streaming continuation/,
+  );
+  assert.equal(transcript.children[300], articles[300]);
+  assert.equal(transcript.children.length, 302);
+  assert.equal(details.open, true);
+  assert.equal(transcript.scrollTop, 500);
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="messages"]',
+    )!
+    .click();
+  assert.equal(transcript.children[0], articles[0]);
+  assert.equal((articles[0] as HTMLElement).hidden, true);
+  observer.disconnect();
+});
+
+test("following the transcript reveals its last message before measuring the scroll height", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  const revealed: Element[] = [];
+  const frames = new Map<number, FrameRequestCallback>();
+  let nextFrame = 0;
+  dom.window.requestAnimationFrame = (callback) => {
+    frames.set(++nextFrame, callback);
+    return nextFrame;
+  };
+  dom.window.cancelAnimationFrame = (id) => {
+    frames.delete(id);
+  };
+  const flushFrames = (): void => {
+    for (const [id, callback] of frames) {
+      frames.delete(id);
+      callback(0);
+    }
+  };
+  Object.defineProperty(dom.window.Element.prototype, "scrollIntoView", {
+    value(this: Element, options: ScrollIntoViewOptions) {
+      assert.equal(options.block, "end");
+      revealed.push(this);
+    },
+  });
+  const transcript = document.getElementById("messages")!;
+  Object.defineProperties(transcript, {
+    scrollHeight: { get: () => (revealed.length ? 2000 : 1000) },
+    clientHeight: { value: 600 },
+  });
+  state.activeId = "alpha";
+  state.messages = [
+    { role: "assistant", content: "Latest response" },
+    { role: "system", content: "Hidden trailing event" },
+  ];
+  publish(state);
+  assert.equal(transcript.scrollTop, 1000);
+  flushFrames();
+  assert.equal(revealed.at(-1), transcript.firstElementChild);
+  assert.equal(transcript.scrollTop, 2000);
+  transcript.scrollTop = 1400;
+  state.messages[0]!.content += " continued";
+  publish(state);
+  flushFrames();
+  assert.equal(revealed.length, 2);
+  assert.equal(revealed.at(-1), transcript.firstElementChild);
+  transcript.scrollTop = 100;
+  publish(state);
+  flushFrames();
+  assert.equal(revealed.length, 2);
+  assert.equal(transcript.scrollTop, 100);
+  transcript.scrollTop = 1400;
+  publish(state);
+  transcript.scrollTop = 100;
+  flushFrames();
+  assert.equal(revealed.length, 2);
+  assert.equal(transcript.scrollTop, 100);
+  state.activeId = "beta";
+  publish(state);
+  transcript.scrollTop = 100;
+  publish(state);
+  assert.equal(frames.size, 0);
+  assert.equal(transcript.scrollTop, 100);
+});
+
+test("message reuse handles metadata changes, truncation, session switches and resets", async (t) => {
+  const { document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.messages = [
+    { role: "assistant", content: "First" },
+    { role: "output", content: "Second" },
+  ];
+  publish(state);
+  const transcript = document.getElementById("messages")!;
+  const first = transcript.firstElementChild;
+  state.messages[1] = {
+    role: "tool",
+    content: "Second",
+    title: "Command failed",
+    error: true,
+    timestamp: "2026-01-01T12:00:00Z",
+    agentId: "worker",
+    details: '{"exitCode":1}',
+  };
+  publish(state);
+  assert.equal(transcript.firstElementChild, first);
+  assert.ok(transcript.children[1]!.classList.contains("failed"));
+  assert.equal((transcript.children[1] as HTMLElement).hidden, false);
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="system"]',
+    )!
+    .click();
+  assert.match(transcript.children[1]!.textContent ?? "", /\[worker\]/);
+  assert.ok(transcript.querySelector("time"));
+  const details = transcript.querySelector("details")!;
+  details.open = true;
+  state.messages[1]!.details = '{"exitCode":2}';
+  publish(state);
+  assert.equal(transcript.querySelector("details")?.open, true);
+  assert.match(
+    transcript.querySelector("details pre")?.textContent ?? "",
+    /"exitCode":2/,
+  );
+  state.messages.pop();
+  publish(state);
+  assert.equal(transcript.children.length, 1);
+  const beforeSwitch = transcript.firstElementChild;
+  state.activeId = "beta";
+  publish(state);
+  assert.notEqual(transcript.firstElementChild, beforeSwitch);
+  const beforeReset = transcript.firstElementChild;
+  state.repositories[1]!.generation = 1;
+  publish(state);
+  assert.notEqual(transcript.firstElementChild, beforeReset);
+  state.messages = [];
+  publish(state);
+  assert.equal(transcript.children.length, 0);
+});
+
+test("transcript CSS skips off-screen layout and remembers rendered message heights", async (t) => {
+  const { document } = await setup(t);
+  const style = document.createElement("style");
+  style.textContent = await readFile(
+    join(__dirname, "../../media/app.css"),
+    "utf8",
+  );
+  document.head.append(style);
+  const rule = [...style.sheet!.cssRules].find(
+    (rule) => "selectorText" in rule && rule.selectorText === ".message",
+  ) as CSSStyleRule;
+  assert.ok(rule);
+  assert.equal(rule.style.getPropertyValue("content-visibility"), "auto");
+  assert.equal(
+    rule.style.getPropertyValue("contain-intrinsic-block-size"),
+    "auto 160px",
+  );
+});
+
 test("chat sends to the selected repository, blocks double submission and renders safe HTML equations", async (t) => {
   const { dom, document, posted, publish, state } = await setup(t);
   const alpha = state.repositories[0];

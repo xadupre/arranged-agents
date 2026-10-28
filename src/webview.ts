@@ -962,7 +962,13 @@ declare function acquireVsCodeApi(): {
     questions.hidden = pending.length === 0;
   }
 
+  let scrollFrame: number | undefined;
+
   function renderMessages(switched = false): void {
+    if (scrollFrame !== undefined) {
+      window.cancelAnimationFrame(scrollFrame);
+      scrollFrame = undefined;
+    }
     const selection = window.getSelection();
     const savePoint = (node: Node | null, offset: number) => {
       const article = (
@@ -996,6 +1002,7 @@ declare function acquireVsCodeApi(): {
       messages.replaceChildren();
       messageCards.length = 0;
     }
+    let lastVisibleMessage: HTMLElement | undefined;
     for (const [index, message] of (state?.messages ?? []).entries()) {
       const failed =
         message.error ||
@@ -1020,6 +1027,9 @@ declare function acquireVsCodeApi(): {
       ) {
         if (previous.article.hidden !== hidden)
           previous.article.hidden = hidden;
+        if (!hidden) {
+          lastVisibleMessage = previous.article;
+        }
         continue;
       }
       const article = document.createElement("article");
@@ -1027,6 +1037,9 @@ declare function acquireVsCodeApi(): {
       if (failed) article.classList.add("failed");
       article.dataset.index = String(index);
       article.hidden = hidden;
+      if (!hidden) {
+        lastVisibleMessage = article;
+      }
       const heading = document.createElement("h3");
       heading.textContent =
         (message.title ?? roleLabels[message.role]) +
@@ -1097,6 +1110,16 @@ declare function acquireVsCodeApi(): {
     }
     if (switched || nearBottom) {
       messages.scrollTop = messages.scrollHeight;
+      const pendingScrollTop = messages.scrollTop;
+      // Resolve skipped content after layout has updated its estimated heights.
+      scrollFrame = window.requestAnimationFrame?.(() => {
+        scrollFrame = undefined;
+        if (messages.scrollTop < pendingScrollTop) {
+          return;
+        }
+        lastVisibleMessage?.scrollIntoView?.({ block: "end" });
+        messages.scrollTop = messages.scrollHeight;
+      });
     } else {
       messages.scrollTop = scrollTop;
     }
