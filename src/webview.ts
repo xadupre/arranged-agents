@@ -43,7 +43,6 @@ declare function acquireVsCodeApi(): {
   const questionCards = new Map<string, HTMLElement>();
   const question = element("question", HTMLTextAreaElement);
   type ImageAttachment = import("./images").ImageAttachment;
-  const imageInput = element("images", HTMLInputElement);
   const imagePreviews = element("image-previews", HTMLElement);
   const imageDrafts = new Map<string, ImageAttachment[]>();
   const readingImages = new Set<string>();
@@ -235,8 +234,6 @@ declare function acquireVsCodeApi(): {
       repository?.status === "ready" || repository?.status === "busy";
     const submitting = pending !== undefined && pending.id === repository?.id;
     question.disabled = !ready || submitting;
-    imageInput.disabled =
-      !ready || submitting || readingImages.has(repository?.id ?? "");
     send.disabled =
       !ready ||
       submitting ||
@@ -305,7 +302,6 @@ declare function acquireVsCodeApi(): {
     }
     if (switched) {
       question.value = drafts.get(state.activeId ?? "") ?? state.draft;
-      imageInput.value = "";
       renderImagePreviews();
     }
     element("root", HTMLElement).textContent = state.root;
@@ -1182,18 +1178,19 @@ declare function acquireVsCodeApi(): {
 
   async function addImages(files: File[]): Promise<void> {
     const id = state?.activeId;
-    if (!id || imageInput.disabled || !files.length) return;
+    if (!id || question.disabled || readingImages.has(id) || !files.length)
+      return;
     const generation = state?.repositories.find(
       (repo) => repo.id === id,
     )?.generation;
     const existing = imageDrafts.get(id) ?? [];
     if (
-      existing.length + files.length > Number(imageInput.dataset.maxCount) ||
+      existing.length + files.length > Number(imagePreviews.dataset.maxCount) ||
       files.some(
         (file) =>
-          !imageInput.accept.split(",").includes(file.type) ||
+          !imagePreviews.dataset.mimeTypes!.split(",").includes(file.type) ||
           !file.size ||
-          file.size > Number(imageInput.dataset.maxBytes),
+          file.size > Number(imagePreviews.dataset.maxBytes),
       )
     ) {
       showError(
@@ -1238,17 +1235,23 @@ declare function acquireVsCodeApi(): {
     }
   }
 
-  imageInput.addEventListener("change", () => {
-    const files = [...(imageInput.files ?? [])];
-    imageInput.value = "";
-    void addImages(files);
-  });
   question.addEventListener("paste", (event) => {
-    const files = [...(event.clipboardData?.items ?? [])]
-      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file !== null);
-    if (files.length && !imageInput.disabled) {
+    let files = [...(event.clipboardData?.files ?? [])].filter((file) =>
+      file.type.startsWith("image/"),
+    );
+    if (!files.length) {
+      files = [...(event.clipboardData?.items ?? [])]
+        .filter(
+          (item) => item.kind === "file" && item.type.startsWith("image/"),
+        )
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => file !== null);
+    }
+    if (
+      files.length &&
+      !question.disabled &&
+      !readingImages.has(state?.activeId ?? "")
+    ) {
       event.preventDefault();
       void addImages(files);
     }

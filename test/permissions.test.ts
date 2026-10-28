@@ -114,6 +114,17 @@ test("shell approval uses all runtime-parsed commands and URL destinations", () 
     false,
   );
   assert.equal(
+    automatic({
+      ...shell,
+      fullCommandText: "git status && git commit -am update",
+      commands: [
+        { identifier: "git", readOnly: true },
+        { identifier: "git commit", readOnly: false },
+      ],
+    }),
+    false,
+  );
+  assert.equal(
     automatic(
       {
         ...shell,
@@ -189,8 +200,211 @@ test("only read-only GitHub MCP tools bypass confirmation; writes and unknown to
   );
 });
 
+test("Git/GitHub queries and test runners do not need a readOnly classification", async () => {
+  const handler = permissionHandler({
+    isActive: () => true,
+    approvedOrigins: () => [],
+    rememberOrigin: async () => assert.fail("No URL consent to persist"),
+    ask: async () => assert.fail("Routine commands must not prompt"),
+  });
+  for (const command of [
+    "git diff",
+    "git --no-pager diff --stat",
+    'git -C "/repo with spaces" diff -- src',
+    "git status",
+    "git status --short",
+    "git fetch",
+    "git fetch origin main",
+    "git fetch --all --prune",
+    "git fetch origin && git status --short",
+    "git -c core.quotepath=false status",
+    "git -c color.ui=never diff",
+    "git -ccolor.ui=false diff",
+    'git -C "/repo with spaces" -c color.ui=always --no-pager diff',
+    "git -c advice.detachedHead=false -C /repo -c core.quotePath=true status",
+    "git -c color.ui diff",
+    "git -c core.pager= log -5",
+    "git -c pager.diff=false diff",
+    "git -c core.fsmonitor=false status",
+    "git worktree list --porcelain",
+    "git worktree add -b feature ../feature main",
+    "git worktree move ../feature ../renamed",
+    "git worktree remove ../feature",
+    "git worktree prune",
+    "git worktree repair ../feature",
+    "git -c core.hooksPath=/dev/null worktree add ../feature main",
+    "git worktree add ../feature && git -C ../feature status",
+    "git log -5 --oneline",
+    "gh issue list --repo owner/repo",
+    "gh issue view 42 --comments",
+    "gh pr diff 42",
+    "gh pr checks 42",
+    "gh search issues 'test failure' --repo owner/repo",
+    "npm test -- --runInBand",
+    "npm run test:unit",
+    "pnpm test",
+    "yarn run test:integration",
+    "node --test dist/test/permissions.test.js",
+    "pytest -q test/",
+    "python -m pytest -q",
+    "python3 -m unittest discover",
+    "PYTHONPATH=src python3.12 -m pytest test/",
+    "ctest --test-dir build --output-on-failure",
+    "cargo test --workspace",
+    "go test ./...",
+    "dotnet test",
+    "mvn test",
+    "gradle test",
+    "make test",
+    "git diff && npm test",
+    'cd "/repo with spaces" && git diff && npm test',
+    "git diff; gh issue list",
+    "\n git diff\n",
+    "git diff;\n\nnpm test",
+    "npm test || npm run test:unit",
+    "git diff -- 'file;with|punctuation'",
+    "git diff -- '*.ts'",
+  ]) {
+    assert.deepEqual(
+      await handler(
+        {
+          ...shell,
+          fullCommandText: command,
+          commands: [{ identifier: command.split(" ")[0]!, readOnly: false }],
+        },
+        invocation,
+      ),
+      { kind: "approve-once" },
+      command,
+    );
+  }
+  assert.equal(
+    automatic({
+      ...shell,
+      fullCommandText: "git diff | head -n 10",
+      commands: [
+        { identifier: "git", readOnly: false },
+        { identifier: "head", readOnly: true },
+      ],
+    }),
+    true,
+  );
+});
+
+test("routine-command exceptions do not approve unrelated mutations or shell evaluation", () => {
+  for (const command of [
+    "git commit -am update",
+    "git diff --output=/tmp/diff",
+    "git diff --output /tmp/diff",
+    "git diff --out=/tmp/diff",
+    "git diff --ext-diff",
+    "git show --textconv HEAD",
+    "git -c core.pager=custom diff",
+    "git -c core.fsmonitor=custom status",
+    "git -c core.hooksPath=/tmp/hooks worktree add ../feature",
+    "git -c credential.helper=custom fetch",
+    "git -c alias.query=custom query",
+    "git -c include.path=/tmp/config status",
+    "git -c diff.external=custom diff",
+    "git -ccore.pager=custom worktree list",
+    "git -c core.quotepath=custom status",
+    "git -c color.ui=never -c core.pager=custom diff",
+    "git -c color.ui=never push",
+    "git -c color.ui=never commit -am update",
+    "git -c",
+    "git -c color.ui=never",
+    "git worktree",
+    "git worktree unknown",
+    "git worktree list && git push",
+    "git fetch --upload-pack=custom origin",
+    "git fetch --upload=custom origin",
+    "git fetch --exec custom origin",
+    "git fetch origin && git push",
+    "gh issue create --title bug",
+    "gh issue close 42",
+    "gh pr merge 42",
+    "gh api --method POST repos/owner/repo/issues",
+    "gh issue view 42 --web",
+    "npm run build",
+    "npm run test:unit && rm -rf dist",
+    "npm test & rm file",
+    "npm test > result.txt",
+    "git diff $(touch /tmp/unexpected)",
+    "git diff `touch /tmp/unexpected`",
+    "git diff ${OPTIONS}",
+    "git diff *",
+    "git diff file?.ts",
+    "git -C ~/repo status",
+    'git diff "$OPTIONS"',
+    "git diff\\\n&& rm file",
+    "bash -c 'npm test'",
+    "node -e 'console.log(1)'",
+    "python script.py",
+    "ctest -S script.cmake",
+    "PATH=/untrusted git diff",
+    "npm test &&",
+    "npm test; (rm file)",
+    "git diff 'unterminated",
+    "git diff\n\nrm file",
+  ]) {
+    assert.equal(
+      automatic({
+        ...shell,
+        fullCommandText: command,
+        commands: [{ identifier: command.split(" ")[0]!, readOnly: false }],
+      }),
+      false,
+      command,
+    );
+  }
+  assert.equal(
+    automatic({
+      ...shell,
+      fullCommandText: "git diff && git commit -am update",
+      commands: [
+        { identifier: "git", readOnly: true },
+        { identifier: "git", readOnly: false },
+      ],
+    }),
+    false,
+  );
+  for (const override of [
+    { commands: [] },
+    { hasWriteFileRedirection: true },
+    { managedApprovalRequired: true },
+    { requestSandboxBypass: true },
+    { warning: "Requires confirmation" },
+    { possibleUrls: [{ url: "https://unapproved.test/tests" }] },
+  ]) {
+    assert.equal(
+      automatic({
+        ...shell,
+        fullCommandText: "npm test",
+        commands: [{ identifier: "npm", readOnly: false }],
+        ...override,
+      }),
+      false,
+    );
+  }
+});
+
 test("managed approvals, warnings, and sandbox escalations always require a user", () => {
-  for (const request of [read, shell, url("https://github.com/file")]) {
+  for (const request of [
+    read,
+    shell,
+    {
+      ...shell,
+      fullCommandText: "git fetch",
+      commands: [{ identifier: "git", readOnly: false }],
+    },
+    {
+      ...shell,
+      fullCommandText:
+        "git -c core.hooksPath=/dev/null worktree add ../feature",
+      commands: [{ identifier: "git", readOnly: false }],
+    },
+    url("https://github.com/file"),
+  ]) {
     assert.equal(
       automatic({ ...request, managedApprovalRequired: true }),
       false,

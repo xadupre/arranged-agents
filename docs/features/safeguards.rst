@@ -19,7 +19,25 @@ Tool permissions
 Built-in tools can read and edit files and execute commands. Local file reads,
 HTTPS reads from GitHub service domains, read-only GitHub MCP tools, and commands
 classified as read-only by the CLI are approved automatically. Literal read-only
-Git and GitHub queries are also allowed.
+Git and GitHub queries, such as ``git diff``, ``git status`` and
+``gh issue list/view``, are also allowed even without a read-only classification.
+
+``git fetch`` and ``git worktree list/add/move/remove/prune/repair`` are
+automatically approved. Fetch can download objects and update remote-tracking
+references; worktree operations can create, move and remove working directories.
+Repeated ``-C`` and ``-c`` options can be combined with these commands.
+``-c`` settings must belong to the recognized non-executable settings: boolean
+advice, quoting, index, filesystem and fetch-pruning settings, color modes,
+rename detection and untracked-file display. Disabling a pager or filesystem
+monitor, or setting ``core.hooksPath=/dev/null`` to disable hooks, is also allowed.
+Unknown settings and options that execute a custom program require confirmation.
+
+Literal test commands are also approved: ``npm test``, ``npm run test:*``,
+``pnpm``/``yarn`` test scripts, ``node --test``, ``pytest``,
+``python -m pytest``/``unittest``, ``ctest`` and
+``cargo``/``go``/``dotnet``/``mvn``/``gradle``/``make test``.
+Test code and scripts can write artifacts and execute project-defined code.
+The additional command exceptions do not cover shell expansions or redirections.
 
 Other HTTP or HTTPS reads require consent for the URL origin: scheme, hostname
 and port. **Allow <origin> and remember** saves approval across repositories and
@@ -27,8 +45,9 @@ sessions. Redirects, subdomains, ports and schemes are separate origins.
 Approved origins can be reviewed or removed in the Arranged Agents settings.
 
 Every command in a pipeline or compound command must qualify individually.
-Writes, repository-changing Git or GitHub actions, sandbox escalation, warnings
-and managed requests that require human approval remain manual. Pending requests
+Other writes and repository-changing Git or GitHub actions remain manual.
+Sandbox escalation, warnings and managed requests that require human approval
+always remain manual, including for the commands listed above. Pending requests
 identify their repository and stay visible regardless of transcript filters.
 Cancellation or closure rejects them.
 
