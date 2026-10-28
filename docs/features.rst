@@ -7,6 +7,7 @@ Current features
 * Open a three-panel editor tab: repository activity left, chat center and repositories right.
 * Browse issues, PRs, your comments and later responses, and recent local commits.
 * Highlight your issues/PRs and flag participation and responses after your latest reply.
+* Find direct @mentions you have not answered with the Mentions button.
 * Open issues, PRs, comments and GitHub-backed commits in the external browser.
 * Discover immediate child directories containing ``.git``, including worktrees.
 * Start each repository's session lazily when clicked.
@@ -141,7 +142,10 @@ discussion are paginated to compute participation and later responses accurately
 Submitted reviews and inline review comments count as participation; pending
 reviews do not. Editing an older comment is not a new response. These flags compare
 timestamps, not whether you have read a response. Use Refresh to fetch new activity;
-there is no background polling. GitHub search indexing can delay the Comments feed,
+there is no background polling. Mentions shows direct username pings in descriptions,
+comments and reviews without a subsequent response from you in the discussion,
+including closed issues/PRs. Team mentions and your own pings are excluded.
+GitHub search indexing can delay the Comments and Mentions feeds,
 and its normal result limit applies.
 
 Commits shows the latest 30 commits of the current local branch, including

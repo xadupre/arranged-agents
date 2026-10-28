@@ -68,6 +68,7 @@ declare function acquireVsCodeApi(): {
     reviews: "Reviews",
     comments: "Comments",
     commits: "Commits",
+    mentions: "Mentions",
   };
   let githubSection: GitHubSection = "issues";
   const githubPages = new Map<
@@ -633,9 +634,11 @@ declare function acquireVsCodeApi(): {
     }
     if (entry?.status === "ready" && !entry.page?.items.length) {
       githubItems.textContent =
-        githubSection === "comments"
-          ? "No matching comments in this page."
-          : "No entries found.";
+        githubSection === "mentions"
+          ? "No unanswered mentions in this page."
+          : githubSection === "comments"
+            ? "No matching comments in this page."
+            : "No entries found.";
     }
   }
 
@@ -648,6 +651,7 @@ declare function acquireVsCodeApi(): {
       section === "issues" ||
       section === "reviews" ||
       section === "comments" ||
+      section === "mentions" ||
       section === "commits"
     ) {
       githubSection = section;
