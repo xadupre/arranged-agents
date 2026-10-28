@@ -130,6 +130,46 @@ Copilot histories through the SDK, not just the visible transcript. Other
 repositories, unrelated CLI sessions and Git files are untouched. A deletion
 failure is displayed; remaining histories are kept so you can retry.
 
+Review a completed conversation
+-------------------------------
+
+For a task such as implementing a PR through its final commit, select that
+repository's conversation and click **PostMortem** above the chat once its main,
+parallel and queued work has finished. The entire current conversation is analysed,
+including information hidden by the transcript filters. Archived conversations
+and unrelated GitHub activity are not added. A closed, saved conversation can be
+analysed without resuming its main agent.
+
+The report appears below the transcript, with one row per coherent stage such as
+analysis, implementation, tests, corrections and delivery. Its columns cover the
+objective, production and decisions, files/PR/commit, validations, errors and
+corrections, and the numbered source records. Expand **Sources** to inspect the
+original requests, answers, commands, results and technical details.
+Failed or abandoned attempts are part of the analysis, not discarded.
+
+This is a model-generated interpretation, not an independent Git or test audit.
+PR references, commit hashes, file changes and validation results can only be
+reported when recorded in the conversation; absent evidence must remain unknown.
+No tools run during analysis and repository files are not changed. The analysis
+uses your configured Copilot model and allowance. Long transcripts are processed
+in bounded sequential batches without truncation; a stage spanning batches may
+continue across several rows. **Cancel** cancels the analysis without discarding
+the main conversation or a previous report.
+
+**Export JSON** opens a save dialog. The version-1 JSON contains repository/session
+metadata, generation time, source count and SHA-256 fingerprint, the table's
+``rows``, and all analysed ``sources`` with 1-based ``index`` values. A row's
+``firstMessage`` and ``lastMessage`` identify its inclusive evidence range.
+The export contains full recorded text, including tool details and potentially
+sensitive data; review it before sharing.
+
+Reports are saved and archived with their conversation. If you continue chatting,
+the existing report remains a snapshot and shows a notice that new exchanges are
+not included. Generate it again after the new work finishes to update the table
+and export. Invalid or incomplete model output is shown as an error, never as a
+successful partial report. Completed analysis sessions are deleted through the SDK;
+an interrupted runtime may retain its normal CLI-side session history.
+
 Browse repository activity
 --------------------------
 

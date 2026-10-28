@@ -86,6 +86,10 @@ test("corrupt or mismatched history fails explicitly without overwriting the sav
     }),
     JSON.stringify({
       ...snapshot,
+      sessions: [{ ...snapshot.sessions[0], postMortem: {} }],
+    }),
+    JSON.stringify({
+      ...snapshot,
       sessions: [
         {
           id: "alpha",

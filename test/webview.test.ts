@@ -377,6 +377,108 @@ test("the tab has activity navigation and starts no session until a repository i
   ]);
 });
 
+test("PostMortem renders a safe evidence-linked table independently of transcript filters and exports its JSON", async (t) => {
+  const { dom, document, posted, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  state.messages = [
+    { role: "user", content: "Produce the feature" },
+    {
+      role: "tool",
+      content: "npm test\n<script>not HTML</script>",
+      details: '{"command":"npm test"}',
+    },
+    { role: "assistant", content: "Committed abcdef0123456789" },
+  ];
+  publish(state);
+  const button = document.querySelector<HTMLButtonElement>("#postmortem");
+  assert.ok(button);
+  button.click();
+  button.click();
+  assert.equal(
+    posted.filter((message) => message.type === "postmortem").length,
+    1,
+  );
+  assert.deepEqual(posted.at(-1), { type: "postmortem", id: "alpha" });
+  state.postMortemBusy = true;
+  state.repositories[0]!.status = "stopping";
+  publish(state);
+  assert.equal(button.disabled, true);
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#cancel")?.disabled,
+    false,
+  );
+  assert.match(
+    document.getElementById("postmortem-status")?.textContent ?? "",
+    /Analysing all/,
+  );
+  state.postMortemBusy = false;
+  state.repositories[0]!.status = "ready";
+  state.postMortem = {
+    version: 1,
+    repository: { id: "alpha", name: "Alpha", path: "/projects/alpha" },
+    generatedAt: "2026-01-01T12:00:00Z",
+    sourceCount: 3,
+    sourceHash: "a".repeat(64),
+    rows: [
+      {
+        phase: "Implementation",
+        objective: "Produce the feature",
+        production: "<img src=x onerror=alert(1)>",
+        filesAndCommits: "src/feature.ts; abcdef0123456789",
+        validation: "npm test",
+        errors: "Not recorded",
+        firstMessage: 1,
+        lastMessage: 3,
+      },
+    ],
+  };
+  publish(state);
+  assert.equal(
+    document.querySelectorAll("#postmortem-report tbody tr").length,
+    1,
+  );
+  assert.equal(
+    document.querySelector("#postmortem-report img, #postmortem-report script"),
+    null,
+  );
+  const details = document.querySelector<HTMLDetailsElement>(
+    "#postmortem-report details",
+  );
+  assert.ok(details);
+  assert.equal(details.querySelector("pre"), null);
+  details.open = true;
+  details.dispatchEvent(new dom.window.Event("toggle"));
+  assert.match(details.textContent ?? "", /npm test/);
+  assert.match(details.textContent ?? "", /<script>not HTML<\/script>/);
+  const cells = document.querySelector("#postmortem-table table");
+  publish(state);
+  assert.equal(document.querySelector("#postmortem-table table"), cells);
+  document
+    .querySelector<HTMLInputElement>(
+      '#information-filters input[value="messages"]',
+    )
+    ?.click();
+  assert.equal(document.getElementById("postmortem-report")?.hidden, false);
+  document.querySelector<HTMLButtonElement>("#export-postmortem")?.click();
+  assert.deepEqual(posted.at(-1), { type: "export-postmortem", id: "alpha" });
+  state.messages.push({ role: "user", content: "Later work" });
+  publish(state);
+  assert.match(
+    document.getElementById("postmortem-status")?.textContent ?? "",
+    /New exchanges are not included/,
+  );
+  state.activeId = "beta";
+  state.messages = [];
+  state.postMortem = undefined;
+  publish(state);
+  assert.equal(document.getElementById("postmortem-report")?.hidden, true);
+  assert.equal(
+    document.querySelector<HTMLButtonElement>("#export-postmortem")?.disabled,
+    true,
+  );
+});
+
 test("the first repository box groups active sessions and moves closed sessions back without duplicates", async (t) => {
   const { dom, document, posted, publish, state } = await setup(t);
   const started = document.getElementById("started-repositories");

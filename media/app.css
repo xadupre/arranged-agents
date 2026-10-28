@@ -14,6 +14,45 @@ body {
   font-size: var(--vscode-font-size);
 }
 
+#postmortem-report {
+  border-top: 1px solid var(--vscode-panel-border);
+  padding: 8px 12px;
+  max-height: 45vh;
+  overflow: auto;
+  flex-shrink: 0;
+}
+
+.postmortem-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+#postmortem-report table {
+  border-collapse: collapse;
+  min-width: 1000px;
+}
+
+#postmortem-report th,
+#postmortem-report td {
+  border: 1px solid var(--vscode-panel-border);
+  padding: 6px;
+  vertical-align: top;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+#postmortem-report pre {
+  white-space: pre-wrap;
+  max-height: 20em;
+  overflow: auto;
+}
+
+#postmortem-error {
+  color: var(--vscode-errorForeground);
+}
+
 .application {
   display: grid;
   grid-template-columns: minmax(0, 0.6fr) 6px minmax(0, 3fr) 6px minmax(0, 1fr);
