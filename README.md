@@ -149,6 +149,7 @@ Copilot smoke test or publish to the Marketplace.
 ## Checks and packaging
 
 ```bash
+npm ci
 npm run check
 npm run coverage
 npm run package
@@ -182,8 +183,8 @@ extension path. This tests the development extension, not installation of the VS
 
 ### Validation status (2026-10-28)
 
-Verified with Node.js **22.23.4**, Copilot CLI **1.0.105**, and VS Code's WSL remote
-CLI **1.143.1**:
+Earlier local validation used Node.js **22.23.4**, Copilot CLI **1.0.105**, and
+VS Code's WSL remote CLI **1.143.1**:
 
 - `npm ci`, `npm run check`, and `npm run package` pass.
 - `npm run smoke` reaches the authenticated local CLI, receives
@@ -201,6 +202,35 @@ inside VS Code, including Workspace Trust and visual equation layout. The remote
 `--extensionDevelopmentPath` and `--extensionTestsPath`, so installation alone is
 not evidence of activation. Use F5 for the activation check and **Install from
 VSIX** for the packaged UI checks. Windows and macOS have not been tested.
+
+#### Cloud-runner revalidation (2026-10-28)
+
+With Node.js **22.23.3**, npm **10.9.9**, SDK **1.0.27** and `vsce` **4.0.0**:
+
+- `npm ci --omit=optional`, `npm run check` (120 tests), and `npm run package`
+  pass on Linux. Packaging produces `arranged-agents-0.1.0.vsix`; archive inspection
+  confirms that development dependencies, bundled SDK runtimes and test scripts
+  are excluded. Prefer plain `npm ci` for cross-platform installs: omitting
+  optional dependencies requires a native Koffi source build.
+- `npm audit --omit=dev` reports no vulnerabilities; the full audit still reports
+  four moderate development-only entries and no high or critical findings.
+  Keep both overrides: the SDK's unoverridden Zod 4.3.6 can exhaust memory while
+  validating oversized constrained collections (patched in 4.6.6), and Azure
+  Identity 4.14.0 permits the vulnerable MSAL Node 6.0.1 chain described below.
+- The [original CI run](https://github.com/xadupre/arranged-agents/actions/runs/40602742312)
+  failed on `--allow-missing-license`. The supported `--skip-license` policy fixes
+  that failure; [subsequent main CI](https://github.com/xadupre/arranged-agents/actions/runs/40733018813)
+  passed Linux and Windows checks and packaging.
+- `npm run smoke` was attempted but stopped with the missing-CLI error. Neither
+  `copilot` nor `code` is on this runner's `PATH`, so authenticated model requests,
+  VSIX installation/activation, F5, and interactive host safeguards were **not**
+  revalidated here. The earlier local results above are not new host verification.
+
+The current application intentionally enables repository tools/discovery and safe
+HTTP/HTTPS links, unlike the initial question-only prototype. Use the current
+manual checklist in [the development guide](docs/development.rst#manual-validation);
+the original prototype's disabled-tools and inactive-links expectations no longer
+describe the application.
 
 ## Scope and safeguards
 
