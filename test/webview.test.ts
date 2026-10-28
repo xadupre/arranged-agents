@@ -70,6 +70,100 @@ async function setup(t: TestContext) {
   return { dom, document, posted, publish, publishGitHub, state };
 }
 
+test("transcript selections survive state updates and streamed Markdown without intercepting native copy", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.messages = [
+    { role: "assistant", content: "Select **this text** to copy." },
+  ];
+  publish(state);
+  const selection = dom.window.getSelection()!;
+  const selected = document.querySelector(".message strong")!.firstChild!;
+  selection.setBaseAndExtent(selected, 9, selected, 0);
+  assert.equal(selection.toString(), "this text");
+
+  publish(state);
+  assert.equal(selection.toString(), "this text");
+  assert.equal(selection.anchorOffset, 9);
+  assert.equal(selection.getRangeAt(0).startContainer, selection.focusNode);
+  assert.equal(selection.getRangeAt(0).endContainer, selection.anchorNode);
+
+  state.messages[0]!.content += "\n\nMore streamed text.";
+  state.messages.push({ role: "tool", content: "echo done" });
+  publish(state);
+  assert.equal(selection.toString(), "this text");
+
+  const content = document.querySelector(".message .content")!;
+  for (const key of ["c", "C"]) {
+    const event = new dom.window.KeyboardEvent("keydown", {
+      key,
+      ctrlKey: key === "c",
+      metaKey: key === "C",
+      bubbles: true,
+      cancelable: true,
+    });
+    content.dispatchEvent(event);
+    assert.equal(event.defaultPrevented, false);
+  }
+  const menu = new dom.window.MouseEvent("contextmenu", {
+    bubbles: true,
+    cancelable: true,
+    button: 2,
+  });
+  content.dispatchEvent(menu);
+  assert.equal(menu.defaultPrevented, false);
+  assert.equal(selection.toString(), "this text");
+
+  state.activeId = "beta";
+  state.messages = [{ role: "assistant", content: "Another conversation." }];
+  publish(state);
+  assert.equal(selection.toString(), "");
+});
+
+test("copy selections can span messages and clamp to shortened streaming content", async (t) => {
+  const { dom, document, publish, state } = await setup(t);
+  state.activeId = "alpha";
+  state.repositories[0]!.status = "ready";
+  state.messages = [
+    { role: "user", content: "First message" },
+    { role: "tool", content: "Second message" },
+  ];
+  publish(state);
+  const selection = dom.window.getSelection()!;
+  const contents = document.querySelectorAll(".message .content");
+  selection.setBaseAndExtent(
+    contents[0]!.firstChild!,
+    6,
+    contents[1]!.firstChild!,
+    6,
+  );
+  const text = selection.toString();
+  publish(state);
+  assert.equal(selection.toString(), text);
+
+  state.messages[1]!.content = "End";
+  publish(state);
+  assert.equal(selection.focusNode?.textContent, "End");
+  assert.equal(selection.focusOffset, 3);
+
+  const question = document.querySelector<HTMLTextAreaElement>("#question")!;
+  question.value = "Editable draft";
+  question.focus();
+  question.setSelectionRange(0, 8);
+  const paste = new dom.window.KeyboardEvent("keydown", {
+    key: "v",
+    ctrlKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  question.dispatchEvent(paste);
+  assert.equal(paste.defaultPrevented, false);
+  publish(state);
+  assert.equal(document.activeElement, question);
+  assert.equal(question.selectionStart, 0);
+  assert.equal(question.selectionEnd, 8);
+});
+
 test("the activity sidebar shows viewer flags, preserves cached content during streaming, and opens GitHub links", async (t) => {
   const { dom, document, posted, publish, publishGitHub, state } =
     await setup(t);

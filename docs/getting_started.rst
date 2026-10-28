@@ -87,6 +87,11 @@ It also renders inline ``$x^2$`` and display ``$$E=mc^2$$`` equations using nati
 MathML. No remote math assets are loaded. HTTP/HTTPS links, including plain URLs
 in tool output, open in the external browser.
 
+Select transcript text and use **Ctrl+C** (**Cmd+C** on macOS) to copy it.
+Paste into the message or answer box with **Ctrl+V** (**Cmd+V** on macOS).
+The standard right-click menu also provides copy/paste actions. Text selections
+are preserved while responses stream.
+
 Switching repositories preserves each conversation and its unfinished draft.
 The first box on the right, **Active sessions**, groups open sessions and those
 starting or being updated. **Other repositories** lists the rest, without duplicates.

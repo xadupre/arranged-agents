@@ -933,6 +933,24 @@ declare function acquireVsCodeApi(): {
   }
 
   function renderMessages(switched = false): void {
+    const selection = window.getSelection();
+    const savePoint = (node: Node | null, offset: number) => {
+      const article = (
+        node instanceof Element ? node : node?.parentElement
+      )?.closest<HTMLElement>(".message");
+      if (!node || article?.parentElement !== messages) return undefined;
+      const range = document.createRange();
+      range.selectNodeContents(article);
+      range.setEnd(node, offset);
+      return { index: article.dataset.index, offset: range.toString().length };
+    };
+    const anchor =
+      !switched && selection && !selection.isCollapsed
+        ? savePoint(selection.anchorNode, selection.anchorOffset)
+        : undefined;
+    const focus = anchor
+      ? savePoint(selection!.focusNode, selection!.focusOffset)
+      : undefined;
     const showEventDetails =
       filters.querySelector<HTMLInputElement>('input[value="system"]')
         ?.checked !== false;
@@ -1004,6 +1022,31 @@ declare function acquireVsCodeApi(): {
         article.append(details);
       }
       messages.append(article);
+    }
+    if (anchor && focus) {
+      const restorePoint = (
+        point: typeof anchor,
+      ): [Node, number] | undefined => {
+        const article = messages.querySelector(
+          `.message[data-index="${point.index}"]`,
+        );
+        if (!article || (article as HTMLElement).hidden) return undefined;
+        const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+        let offset = point.offset;
+        let last: Node = article;
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          last = node;
+          const length = node.textContent?.length ?? 0;
+          if (offset <= length) return [node, offset];
+          offset -= length;
+        }
+        return [last, last.textContent?.length ?? 0];
+      };
+      const start = restorePoint(anchor);
+      const end = restorePoint(focus);
+      if (start && end) {
+        selection!.setBaseAndExtent(...start, ...end);
+      }
     }
     if (switched || nearBottom) {
       messages.scrollTop = messages.scrollHeight;
