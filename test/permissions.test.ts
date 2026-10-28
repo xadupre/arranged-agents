@@ -305,6 +305,50 @@ test("rejection, closure and managed approval never persist URL consent", async 
   assert.deepEqual(remembered, []);
 });
 
+test("safe shell URL reads remember every explicitly approved root, but unsafe commands do not", async () => {
+  const origins: string[] = [];
+  const labels: (string | undefined)[] = [];
+  const handler = permissionHandler({
+    isActive: () => true,
+    approvedOrigins: () => origins,
+    rememberOrigin: async (origin) => {
+      origins.push(origin);
+    },
+    ask: async (description) => {
+      labels.push(description.approvalLabel);
+      return true;
+    },
+  });
+  const request = {
+    ...shell,
+    fullCommandText: "curl https://one.test/a https://two.test/b",
+    possibleUrls: [
+      { url: "https://one.test/a" },
+      { url: "https://two.test/b" },
+      { url: "https://one.test/c" },
+      { url: "https://github.com/owner/repo" },
+    ],
+  };
+  await handler(request, invocation);
+  assert.deepEqual(labels, [
+    "Allow https://one.test, https://two.test and remember",
+  ]);
+  assert.deepEqual(origins, ["https://one.test", "https://two.test"]);
+  await handler(request, invocation);
+  assert.equal(labels.length, 1);
+  for (const unsafe of [
+    { ...request, hasWriteFileRedirection: true },
+    { ...request, commands: [{ identifier: "curl", readOnly: false }] },
+    { ...request, requestSandboxBypass: true },
+    { ...request, possibleUrls: [{ url: "file:///etc/passwd" }] },
+  ]) {
+    origins.length = 0;
+    await handler(unsafe, invocation);
+    assert.equal(labels.at(-1), undefined);
+    assert.deepEqual(origins, []);
+  }
+});
+
 test("failed persistence does not silently grant a remembered approval", async () => {
   const handler: PermissionHandler = permissionHandler({
     isActive: () => true,

@@ -51,7 +51,9 @@ requests) and edit files. Local file reads, HTTPS reads from ``github.com``,
 and shell commands classified as read-only by the CLI's parser are automatically
 approved. Every command in a shell pipeline or compound command must be read-only;
 file-write redirection and unclassified commands still require confirmation.
-Shell URL destinations must also be GitHub roots or previously approved roots.
+Shell URL destinations must also be GitHub roots or previously approved roots;
+otherwise, a read-only shell request offers explicit remembered consent for
+each new root it accesses.
 Repository-changing Git/GitHub actions are not automatically approved.
 
 Other HTTP/HTTPS reads require explicit consent for the URL's root (scheme,

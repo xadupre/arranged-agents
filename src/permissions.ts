@@ -47,6 +47,17 @@ function approvedUrl(url: string, origins: readonly string[]): boolean {
   );
 }
 
+function readOnlyShell(
+  request: Extract<PermissionRequest, { kind: "shell" }>,
+): boolean {
+  // Use the runtime's shell parser, not command-name or text heuristics.
+  return (
+    request.commands.length > 0 &&
+    request.commands.every((command) => command.readOnly === true) &&
+    !request.hasWriteFileRedirection
+  );
+}
+
 export function automaticallyApprove(
   request: PermissionRequest,
   prompt: PermissionPrompt,
@@ -59,11 +70,8 @@ export function automaticallyApprove(
     case "url":
       return approvedUrl(request.url, origins);
     case "shell":
-      // Use the runtime's shell parser, not command-name or text heuristics.
       return (
-        request.commands.length > 0 &&
-        request.commands.every((command) => command.readOnly === true) &&
-        !request.hasWriteFileRedirection &&
+        readOnlyShell(request) &&
         request.possibleUrls.every(({ url }) => approvedUrl(url, origins))
       );
     case "mcp":
@@ -98,19 +106,36 @@ export function permissionHandler(options: {
     ) {
       return { kind: "approve-once" };
     }
-    const origin =
-      request.kind === "url" &&
+    const urls =
+      request.kind === "url"
+        ? [request.url]
+        : request.kind === "shell" && readOnlyShell(request)
+          ? request.possibleUrls.map(({ url }) => url)
+          : [];
+    const origins =
       !requiresUser(request) &&
-      !requiresUser(invocation.promptRequest)
-        ? urlOrigin(request.url)
-        : undefined;
+      !requiresUser(invocation.promptRequest) &&
+      urls.every((url) => urlOrigin(url) !== undefined)
+        ? [
+            ...new Set(
+              urls
+                .filter((url) => !approvedUrl(url, options.approvedOrigins()))
+                .map((url) => urlOrigin(url)!),
+            ),
+          ]
+        : [];
     const description = describePermission(request, invocation.promptRequest);
     const approved = await options.ask({
       ...description,
-      ...(origin ? { approvalLabel: `Allow ${origin} and remember` } : {}),
+      ...(origins.length
+        ? { approvalLabel: `Allow ${origins.join(", ")} and remember` }
+        : {}),
     });
     if (!approved || !options.isActive()) return reject;
-    if (origin) await options.rememberOrigin(origin);
+    for (const origin of origins) {
+      if (!options.isActive()) return reject;
+      await options.rememberOrigin(origin);
+    }
     return options.isActive() ? { kind: "approve-once" } : reject;
   };
 }
