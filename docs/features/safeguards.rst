@@ -1,0 +1,69 @@
+Safeguards and data boundaries
+=============================
+
+Repository and model context
+----------------------------
+
+No workspace files, editor selections or other repositories are attached
+automatically. Each clicked repository is the working directory of its own CLI
+client. Configuration discovery, skills, on-demand instructions and host Git
+context are enabled, while repository file hooks and cross-session store
+integration remain disabled.
+
+The CLI runs locally, but model requests and relevant tool results can be sent
+to GitHub Copilot under its normal authentication and service-side data policies.
+
+Tool permissions
+----------------
+
+Built-in tools can read and edit files and execute commands. Local file reads,
+HTTPS reads from GitHub service domains, read-only GitHub MCP tools, and commands
+classified as read-only by the CLI are approved automatically. Literal read-only
+Git and GitHub queries are also allowed.
+
+Other HTTP or HTTPS reads require consent for the URL origin: scheme, hostname
+and port. **Allow <origin> and remember** saves approval across repositories and
+sessions. Redirects, subdomains, ports and schemes are separate origins.
+Approved origins can be reviewed or removed in the Arranged Agents settings.
+
+Every command in a pipeline or compound command must qualify individually.
+Writes, repository-changing Git or GitHub actions, sandbox escalation, warnings
+and managed requests that require human approval remain manual. Pending requests
+identify their repository and stay visible regardless of transcript filters.
+Cancellation or closure rejects them.
+
+Webview and content security
+----------------------------
+
+The application authorizes only its nonce-protected script. Model HTML and tool
+output are escaped, math rendering disables trusted TeX commands, and no remote
+scripts or fonts load. Only validated raster attachments and reply images are
+displayed. HTTP and HTTPS links open externally through VS Code; executable and
+local-file schemes are rejected.
+
+Workspace Trust is required. The CLI executable path is machine-scoped.
+
+Stored data
+-----------
+
+Versioned snapshots use atomic, serialized writes in VS Code global storage.
+On POSIX systems, the directory is private and files use mode 0600. Snapshots
+contain plaintext conversations, tool output, attachments and drafts; they are
+not encrypted or synchronized.
+
+Known limitations
+-----------------
+
+There are no automatic editor attachments or Marketplace publication. Model
+context resumption depends on the CLI's own saved session. A crash can lose
+changes since the latest periodic save, although normal closure flushes pending
+writes.
+
+The GitHub activity panel is read-only and has no background polling. Its
+participation indicators compare timestamps rather than read status, and search
+indexing can delay comment and mention results. Local commits without a published
+GitHub hash cannot open in the browser.
+
+Automated checks cover rendering, permission controls, persistence and the SDK
+subprocess lifecycle. They do not replace interactive extension-host validation
+of Workspace Trust, deactivation and visual layout.
