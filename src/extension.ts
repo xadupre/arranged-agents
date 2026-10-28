@@ -3,7 +3,7 @@ import { AgentApplication, parseApplicationMessage } from "./application";
 import { CopilotConversation } from "./conversation";
 import { ConversationRenderer, renderApplication } from "./render";
 import { ApplicationStorage } from "./storage";
-import { describePermission } from "./presentation";
+import { permissionHandler } from "./permissions";
 import { GitHubPanel } from "./github-panel";
 import { askCopilot, requestTimeoutMs } from "./copilot";
 import { generatePostMortem, postMortemResponseSchema } from "./postmortem";
@@ -18,6 +18,7 @@ const closing = new Set<Promise<void>>();
 export function activate(context: vscode.ExtensionContext): void {
   deactivating = false;
   const output = vscode.window.createOutputChannel("Arranged Agents");
+  let savingOrigins: Promise<void> = Promise.resolve();
   const report = (error: unknown): string => {
     const message = error instanceof Error ? error.message : String(error);
     output.appendLine(message);
@@ -101,25 +102,37 @@ export function activate(context: vscode.ExtensionContext): void {
           get timeoutMs() {
             return requestTimeout();
           },
-          onPermissionRequest: async (request, invocation) => {
-            if (!vscode.workspace.isTrusted || !panel) {
-              return {
-                kind: "reject",
-                feedback: "The application is closed or untrusted.",
+          onPermissionRequest: permissionHandler({
+            isActive: () =>
+              vscode.workspace.isTrusted && Boolean(panel) && !stopping,
+            approvedOrigins: () =>
+              vscode.workspace
+                .getConfiguration("arrangedAgents")
+                .get<string[]>("approvedUrlOrigins", []),
+            rememberOrigin: (origin) => {
+              const save = async (): Promise<void> => {
+                const settings =
+                  vscode.workspace.getConfiguration("arrangedAgents");
+                const origins = settings.get<string[]>(
+                  "approvedUrlOrigins",
+                  [],
+                );
+                await settings.update(
+                  "approvedUrlOrigins",
+                  [...new Set([...origins, origin])],
+                  vscode.ConfigurationTarget.Global,
+                );
               };
-            }
-            const approved = await application.requestPermission(
-              repository.id,
-              describePermission(request, invocation.promptRequest),
-              requestId,
-            );
-            return approved && panel && vscode.workspace.isTrusted
-              ? { kind: "approve-once" }
-              : {
-                  kind: "reject",
-                  feedback: "The user did not approve this operation.",
-                };
-          },
+              savingOrigins = savingOrigins.then(save, save);
+              return savingOrigins;
+            },
+            ask: (description) =>
+              application.requestPermission(
+                repository.id,
+                description,
+                requestId,
+              ),
+          }),
           onUserInputRequest: (request) => {
             if (!vscode.workspace.isTrusted || !panel) {
               throw new Error("The application is closed or untrusted.");

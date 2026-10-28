@@ -843,7 +843,9 @@ declare function acquireVsCodeApi(): {
       for (const approve of [true, false]) {
         const button = document.createElement("button");
         button.type = "button";
-        button.textContent = approve ? "Allow once" : "Reject";
+        button.textContent = approve
+          ? (request.approvalLabel ?? "Allow once")
+          : "Reject";
         button.addEventListener("click", () => {
           for (const control of actions.querySelectorAll("button")) {
             control.disabled = true;

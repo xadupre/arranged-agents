@@ -61,6 +61,7 @@ export interface PendingPermission {
   summary: string;
   content: string;
   details: string;
+  approvalLabel?: string;
 }
 export interface PendingQuestion extends UserInputRequest {
   id: string;

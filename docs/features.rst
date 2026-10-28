@@ -23,7 +23,7 @@ Current features
 * Distinguish open sessions with a tinted repository background and solid indicator;
   active work uses a different tint and spinner, independently of selection.
 * Resize panels by dragging their dividers or using the left/right arrow keys.
-* Inspect repository files and use Git/GitHub tools with explicit permission confirmation.
+* Automatically approve file reads and read-only Git/GitHub tools; remember URL-root consent.
 * Send with Enter, insert new lines with Shift+Enter and open HTTP/HTTPS links.
 * Display live messages, commands, tool results, available reasoning and session events.
 * Toggle information categories above the chat without discarding history or affecting tools.
@@ -46,7 +46,23 @@ Copilot system instructions are preserved; only response formatting guidance is
 appended. Repository file hooks and cross-session store integration stay disabled.
 
 Built-in tools can read files, execute commands (including ``gh`` for pull
-requests) and edit files. Tool permission requests appear directly in the
+requests) and edit files. Local file reads, HTTPS reads from ``github.com``,
+``raw.githubusercontent.com`` and ``api.github.com``, read-only GitHub MCP tools,
+and shell commands classified as read-only by the CLI's parser are automatically
+approved. Every command in a shell pipeline or compound command must be read-only;
+file-write redirection and unclassified commands still require confirmation.
+Shell URL destinations must also be GitHub roots or previously approved roots.
+Repository-changing Git/GitHub actions are not automatically approved.
+
+Other HTTP/HTTPS reads require explicit consent for the URL's root (scheme,
+hostname and port). **Allow <root> and remember** saves that approval across
+sessions and repositories. Review or remove saved roots under
+**Arranged Agents: Approved Url Origins** in Settings. Different schemes,
+subdomains, ports and redirect destinations require their own approval.
+Rejections are not saved. Sandbox escalation, warnings and managed requests
+requiring human approval always remain manual, even for an approved root.
+
+Remaining tool permission requests appear directly in the
 conversation panel with repository/operation details and **Allow once** / **Reject**
 choices. Commands, paths, proposed changes and sandbox warnings are presented
 readably; raw JSON is available only through the technical-events filter.
@@ -54,7 +70,7 @@ Copilot's questions use inline choice buttons and optional free-text answers,
 not JSON payloads. They do not open modal dialogs, issue notification sounds, take keyboard
 focus or disappear when display filters are unchecked. Requests from background
 repositories also remain visible. Cancellation or closure rejects pending requests;
-no automatic approval is granted. Relevant file/tool results may be sent to Copilot; normal CLI
+no pending request is approved on cancellation or closure. Relevant file/tool results may be sent to Copilot; normal CLI
 authentication and GitHub access rights apply.
 
 The application's own script is authorized by a CSP nonce; model responses
