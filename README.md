@@ -155,97 +155,24 @@ Sphinx documentation: [getting started](docs/getting_started.rst),
 [features and safeguards](docs/features.rst), [source guide](docs/design.rst),
 and [development, coverage, releases and documentation build](docs/development.rst).
 
-Like [onnx-light-viewer](https://github.com/xadupre/onnx-light-viewer), automation
-is split into Linux/Windows tests, nightly TypeScript coverage with Codecov,
-weekly Sphinx documentation, and tagged GitHub releases with a VSIX attachment.
-Configure `CODECOV_TOKEN` for coverage uploads. Workflows never run the paid
-Copilot smoke test or publish to the Marketplace.
-
-## Checks and packaging
+## Development
 
 ```bash
 npm ci
 npm run check
-npm run coverage
 npm run package
-code --install-extension ./arranged-agents-0.1.0.vsix
 ```
 
-The resulting `.vsix` can be installed with VS Code's **Install from VSIX** command.
-To test the real local CLI connection, run `npm run smoke`. This sends three model
-requests and requires your existing Copilot login; it is not part of CI.
-The smoke test creates a temporary Git repository and verifies that Copilot can
-read a unique marker file there, stops the CLI, resumes the same session in a new
-process and checks that its earlier context is retained.
-Packaging uses the supported `--skip-license` policy while the project remains
-`UNLICENSED`; this does not grant a license or publish to the Marketplace.
+`check` runs formatting, lint, compilation and unit tests without model requests.
+Use `npm run coverage` for coverage reports. Install the generated `.vsix` with
+VS Code's **Extensions: Install from VSIX** command.
 
-The unit tests also run the real SDK against a small local stdio CLI fixture:
-they cover PATH lookup, missing CLI, authentication/model errors, empty answers,
-and cancellation/timeouts during startup, session creation, generation, and
-shutdown. They verify that each child process exits. No model requests are made
-by `npm run check`. The Bash launcher also has focused subprocess tests on
-Linux; they do not open VS Code. Application tests check lazy repository sessions,
-conversation isolation and cleanup. DOM tests execute the actual compiled
-webview script and check panel layout, keyboard submission, filters, safe links,
-chat controls and MathML. SDK fixture tests also verify live commands, separate
-output channels, available reasoning and deduplicated final responses.
+`npm run smoke` tests the real CLI and session resume; it requires an authenticated
+Copilot CLI and uses your allowance. Automated tests do not replace interactive
+VS Code checks.
 
-To check activation in a real extension host, select **Test Arranged Agents
-activation** in VS Code's Run and Debug view and press **F5**. On success it writes
-`dist/scripts/extension-host-smoke-result.json` with the host versions and loaded
-extension path. This tests the development extension, not installation of the VSIX.
-
-### Validation status (2026-10-28)
-
-Earlier local validation used Node.js **22.23.4**, Copilot CLI **1.0.105**, and
-VS Code's WSL remote CLI **1.143.1**:
-
-- `npm ci`, `npm run check`, and `npm run package` pass.
-- `npm run smoke` reaches the authenticated local CLI, receives
-  `ARRANGED_AGENTS_OK`, reads a repository file, and renders the result.
-- `code --install-extension ./arranged-agents-0.1.0.vsix` succeeds; the installed
-  extension is listed as `xadupre.arranged-agents@0.1.0`.
-- Production dependencies have no reported advisories. The full audit reports
-  four moderate entries in the development-only `vsce` → Azure Identity →
-  MSAL → UUID chain. `npm audit --audit-level=high` passes. These are not shipped
-  in the VSIX.
-
-**Still pending:** interactive validation of the packaged three-panel application
-inside VS Code, including Workspace Trust and visual equation layout. The remote
-`code` command available during initial validation rejects
-`--extensionDevelopmentPath` and `--extensionTestsPath`, so installation alone is
-not evidence of activation. Use F5 for the activation check and **Install from
-VSIX** for the packaged UI checks. Windows and macOS have not been tested.
-
-#### Cloud-runner revalidation (2026-10-28)
-
-With Node.js **22.23.3**, npm **10.9.9**, SDK **1.0.27** and `vsce` **4.0.0**:
-
-- `npm ci --omit=optional`, `npm run check` (120 tests), and `npm run package`
-  pass on Linux. Packaging produces `arranged-agents-0.1.0.vsix`; archive inspection
-  confirms that development dependencies, bundled SDK runtimes and test scripts
-  are excluded. Prefer plain `npm ci` for cross-platform installs: omitting
-  optional dependencies requires a native Koffi source build.
-- `npm audit --omit=dev` reports no vulnerabilities; the full audit still reports
-  four moderate development-only entries and no high or critical findings.
-  Keep both overrides: the SDK's unoverridden Zod 4.3.6 can exhaust memory while
-  validating oversized constrained collections (patched in 4.6.6), and Azure
-  Identity 4.14.0 permits the vulnerable MSAL Node 6.0.1 chain described below.
-- The [original CI run](https://github.com/xadupre/arranged-agents/actions/runs/40602742312)
-  failed on `--allow-missing-license`. The supported `--skip-license` policy fixes
-  that failure; [subsequent main CI](https://github.com/xadupre/arranged-agents/actions/runs/40733018813)
-  passed Linux and Windows checks and packaging.
-- `npm run smoke` was attempted but stopped with the missing-CLI error. Neither
-  `copilot` nor `code` is on this runner's `PATH`, so authenticated model requests,
-  VSIX installation/activation, F5, and interactive host safeguards were **not**
-  revalidated here. The earlier local results above are not new host verification.
-
-The current application intentionally enables repository tools/discovery and safe
-HTTP/HTTPS links, unlike the initial question-only prototype. Use the current
-manual checklist in [the development guide](docs/development.rst#manual-validation);
-the original prototype's disabled-tools and inactive-links expectations no longer
-describe the application.
+See the [development guide](docs/development.rst) for activation and manual
+validation, documentation builds, screenshots, CI and release instructions.
 
 ## Scope and safeguards
 
