@@ -1,6 +1,8 @@
 Arranged Agents
 ===============
 
+Version |release|.
+
 .. image:: ../media/icon.svg
    :alt: Arranged Agents icon
    :width: 128px

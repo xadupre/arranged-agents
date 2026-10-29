@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { version } from "../package.json";
 import {
   ConversationRenderer,
   renderMarkdown,
@@ -11,6 +12,19 @@ import { describePermission, describeTool } from "../src/presentation";
 import type { ChatMessage } from "../src/application";
 import { isImageDataUrl, MAX_IMAGE_BYTES, parseImages } from "../src/images";
 import { testImage } from "./helpers";
+
+test("application header displays the package version", () => {
+  const html = renderApplication({
+    cspSource: "https://webview.invalid",
+    scriptUri: "https://webview.invalid/webview.js",
+    styleUri: "https://webview.invalid/app.css",
+  });
+  assert.ok(
+    html.includes(
+      `<small id="app-version" title="Arranged Agents version">v${version}</small>`,
+    ),
+  );
+});
 
 test("cached conversation HTML follows edited content and roles while retaining fresh metadata and avoiding stale session entries", () => {
   const renderer = new ConversationRenderer();
