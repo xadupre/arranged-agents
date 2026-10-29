@@ -1,6 +1,20 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ "${1-}" == --help || "${1-}" == -h ]]; then
+    printf '%s\n' \
+        'Usage: ./start.sh [repository-parent] [VS Code options...]' \
+        '' \
+        'Installs missing dependencies, compiles, and opens Arranged Agents in VS Code.' \
+        'The repository parent defaults to the source checkout parent, not the current directory.' \
+        '' \
+        'Examples:' \
+        '  ./start.sh' \
+        '  ./start.sh /path/to/repositories' \
+        '  ./start.sh /path/to/repositories --wait'
+    exit 0
+fi
+
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE="$(cd -- "$ROOT/.." && pwd)"
 if [[ $# -gt 0 && "$1" != --* ]]; then

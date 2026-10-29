@@ -38,20 +38,28 @@ _PostMortem turns a recorded conversation into an evidence-linked report._
 The CLI runs locally, but model requests still go to GitHub Copilot: this is not
 an offline model. No separate API key is required.
 
-## Try it
+## Quick start
 
-Pass the parent directory containing your repositories:
+From a Bash terminal in this checkout, run:
+
+```bash
+./start.sh
+```
+
+Like onnx-light-viewer, `start.sh` installs missing dependencies, compiles, and opens a new VS Code
+development window. It chooses the desktop `code` executable, not the restricted
+remote CLI, and removes the remote IPC hook. Other installed extensions are
+disabled in that window. The **Arranged Agents** tab opens automatically.
+The launcher uses the source checkout's parent directory, regardless of the
+terminal's current directory. To choose another parent containing your repositories:
 
 ```bash
 ./start.sh /path/to/repositories
 ```
 
-The script installs missing dependencies, compiles, and opens a new VS Code
-development window. It chooses the desktop `code` executable, not the restricted
-remote CLI, and removes the remote IPC hook. Other installed extensions are
-disabled in that window. The **Arranged Agents** tab opens automatically.
-Without a directory argument, the launcher uses the source checkout's parent
-directory, regardless of the terminal's current directory.
+Run `./start.sh --help` for usage and examples. VS Code's `code` command must be
+on `PATH`. After editing the application, close the development window and run
+`./start.sh` again.
 The source checkout is used for compilation, not as the implicit repository root.
 No Copilot process or session starts until a repository is clicked.
 

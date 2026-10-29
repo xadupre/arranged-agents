@@ -89,6 +89,42 @@ async function setup(
 }
 
 test(
+  "launcher help needs no prerequisites and does not install or launch",
+  bashOnly,
+  async (t) => {
+    const launcher = await setup(t, { npm: false, desktop: false });
+    for (const flag of ["--help", "-h"]) {
+      const { stdout, stderr } = await launcher.run(flag);
+      assert.match(stdout, /Usage: \.\/start\.sh/);
+      assert.match(stdout, /source checkout parent, not the current directory/);
+      assert.match(stdout, /\.\/start\.sh \/path\/to\/repositories --wait/);
+      assert.equal(stderr, "");
+    }
+    await assert.rejects(readFile(launcher.log), { code: "ENOENT" });
+  },
+);
+
+test(
+  "launcher starts with no arguments using the checkout parent",
+  bashOnly,
+  async (t) => {
+    const launcher = await setup(t, { installed: true });
+    await launcher.run();
+    assert.deepEqual(
+      (await readFile(launcher.log, "utf8")).trim().split("\n"),
+      [
+        "npm run compile",
+        `code cwd=${launcher.root} hook=unset`,
+        "--new-window",
+        "--disable-extensions",
+        `--extensionDevelopmentPath=${launcher.root}`,
+        dirname(launcher.root),
+      ],
+    );
+  },
+);
+
+test(
   "launcher defaults to the checkout parent regardless of cwd and builds from its own directory",
   bashOnly,
   async (t) => {
