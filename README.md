@@ -14,6 +14,19 @@ installed GitHub Copilot CLI**:
 - **Right:** direct child directories containing a `.git` directory or file.
   Each repository has its own session, started only when you click it.
 
+## Screenshots
+
+These screenshots show the application webview with illustrative demo data,
+not a live Copilot conversation or GitHub activity.
+
+![Three-panel workspace with GitHub activity, a Copilot conversation and independent repository sessions](docs/images/workspace.png)
+
+_Repository activity, Markdown conversations and independent sessions in one tab._
+
+![PostMortem report with validation results, source references and JSON export](docs/images/postmortem.png)
+
+_PostMortem turns a recorded conversation into an evidence-linked report._
+
 ## Requirements
 
 - VS Code 1.105 or newer.
