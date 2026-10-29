@@ -1,5 +1,5 @@
-Feature guide
-=============
+Features
+========
 
 Arranged Agents groups its user-facing capabilities into the feature pages
 below. Start with :doc:`getting_started` for installation and a first
