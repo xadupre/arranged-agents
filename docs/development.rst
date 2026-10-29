@@ -1,5 +1,5 @@
-Development and automation
-==========================
+Development
+===========
 
 Local checks
 ------------
