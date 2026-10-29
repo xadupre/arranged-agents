@@ -8,7 +8,10 @@ release = json.loads(
     )
 )["version"]
 html_theme = "pydata_sphinx_theme"
+html_logo = "../media/icon.svg"
+html_favicon = "../media/icon.svg"
 html_theme_options = {
     "github_url": "https://github.com/xadupre/arranged-agents",
     "logo": {"text": release},
+    "header_links_before_dropdown": 10,
 }
