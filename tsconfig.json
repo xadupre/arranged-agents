@@ -3,6 +3,7 @@
     "target": "ES2022",
     "module": "Node16",
     "moduleResolution": "Node16",
+    "resolveJsonModule": true,
     "moduleDetection": "legacy",
     "lib": ["ES2022", "ESNext.Disposable", "DOM"],
     "strict": true,

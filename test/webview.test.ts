@@ -737,7 +737,13 @@ test("the compact conversation heading groups its title, session status and Post
   assert.ok(heading);
   assert.deepEqual(
     [...heading.children].map((element) => element.id || element.className),
-    ["active-repository", "session-activity", "postmortem", "settings"],
+    [
+      "active-repository",
+      "session-activity",
+      "postmortem",
+      "settings",
+      "app-version",
+    ],
   );
   assert.equal(
     heading.querySelector("#active-repository")?.textContent,

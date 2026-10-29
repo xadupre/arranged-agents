@@ -256,7 +256,8 @@ body.resizing {
   white-space: nowrap;
 }
 
-.chat-heading button {
+.chat-heading button,
+#app-version {
   flex-shrink: 0;
 }
 

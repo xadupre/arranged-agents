@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import MarkdownIt from "markdown-it";
 import math from "@vscode/markdown-it-katex";
+import { version } from "../package.json";
 import { isExternalUrl } from "./links";
 import type { ChatMessage } from "./application";
 import {
@@ -172,6 +173,7 @@ export function renderApplication(resources: {
         <p class="session-activity" role="status"><span id="activity-icon" class="spinner" aria-hidden="true" hidden></span><span id="session-status">No Copilot session has started.</span><small id="session-tokens" hidden></small></p>
         <button id="postmortem" type="button" disabled title="Analyse the whole selected conversation after its work finishes">PostMortem</button>
         <button id="settings" type="button" title="Open Arranged Agents settings">Settings</button>
+        <small id="app-version" title="Arranged Agents version">v${escape(version)}</small>
       </div>
       <fieldset id="information-filters">
         <legend>Show information</legend>
